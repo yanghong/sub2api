@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand"
+	"mime"
 	"net/http"
 	"sort"
 	"strconv"
@@ -38,9 +39,10 @@ const (
 	// ChatGPT internal API for OAuth accounts
 	chatgptCodexURL = "https://chatgpt.com/backend-api/codex/responses"
 	// OpenAI Platform API for API Key accounts (fallback)
-	openaiPlatformAPIURL   = "https://api.openai.com/v1/responses"
-	openaiStickySessionTTL = time.Hour // 粘性会话TTL
-	codexCLIUserAgent      = "codex_cli_rs/0.104.0"
+	openaiPlatformAPIURL               = "https://api.openai.com/v1/responses"
+	openaiPlatformImagesGenerationsURL = "https://api.openai.com/v1/images/generations"
+	openaiStickySessionTTL             = time.Hour // 粘性会话TTL
+	codexCLIUserAgent                  = "codex_cli_rs/0.104.0"
 	// codex_cli_only 拒绝时单个请求头日志长度上限（字符）
 	codexCLIOnlyHeaderValueMaxBytes = 256
 
@@ -230,6 +232,8 @@ type OpenAIForwardResult struct {
 	ReasoningEffort *string
 	Stream          bool
 	OpenAIWSMode    bool
+	ImageCount      int
+	ImageSize       string
 	ResponseHeaders http.Header
 	Duration        time.Duration
 	FirstTokenMs    *int
@@ -2439,6 +2443,202 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 }
 
+func (s *OpenAIGatewayService) ForwardImages(ctx context.Context, c *gin.Context, account *Account, body []byte, originalModel string, endpoint string) (*OpenAIForwardResult, error) {
+	startTime := time.Now()
+	if account == nil {
+		return nil, errors.New("account is nil")
+	}
+	if account.Type != AccountTypeAPIKey {
+		if c != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{
+					"type":    "invalid_request_error",
+					"message": "OpenAI Images API is supported only for OpenAI API key accounts",
+				},
+			})
+		}
+		return nil, errors.New("openai images api requires api key account")
+	}
+
+	reqModel := strings.TrimSpace(originalModel)
+	isMultipart := isOpenAIImagesMultipartRequest(c)
+	upstreamModel := account.GetMappedModel(reqModel)
+	if upstreamModel == "" {
+		upstreamModel = reqModel
+	}
+	if !isMultipart {
+		reqBody, err := getOpenAIRequestBodyMap(c, body)
+		if err != nil {
+			return nil, err
+		}
+		if model, ok := reqBody["model"].(string); ok && strings.TrimSpace(model) != "" {
+			reqModel = strings.TrimSpace(model)
+			upstreamModel = account.GetMappedModel(reqModel)
+			if upstreamModel == "" {
+				upstreamModel = reqModel
+			}
+		}
+		if upstreamModel != reqModel {
+			reqBody["model"] = upstreamModel
+			body, err = json.Marshal(reqBody)
+			if err != nil {
+				return nil, fmt.Errorf("serialize image request body: %w", err)
+			}
+		}
+	}
+
+	token, _, err := s.GetAccessToken(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+
+	baseURL := account.GetOpenAIBaseURL()
+	targetURL := openaiPlatformImagesGenerationsURL
+	if baseURL != "" {
+		validatedURL, err := s.validateUpstreamBaseURL(baseURL)
+		if err != nil {
+			return nil, err
+		}
+		targetURL = buildOpenAIImagesURL(validatedURL, endpoint)
+	} else {
+		targetURL = buildOpenAIImagesURL("https://api.openai.com/v1", endpoint)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("authorization", "Bearer "+token)
+	if c != nil && c.Request != nil {
+		for key, values := range c.Request.Header {
+			lowerKey := strings.ToLower(key)
+			if openaiAllowedHeaders[lowerKey] {
+				for _, v := range values {
+					req.Header.Add(key, v)
+				}
+			}
+		}
+	}
+	req.Header.Del("authorization")
+	req.Header.Set("authorization", "Bearer "+token)
+	if req.Header.Get("content-type") == "" {
+		req.Header.Set("content-type", "application/json")
+	}
+
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	setOpsUpstreamRequestBody(c, body)
+	upstreamStart := time.Now()
+	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+	if err != nil {
+		safeErr := sanitizeUpstreamErrorMessage(err.Error())
+		setOpsUpstreamError(c, 0, safeErr, "")
+		if c != nil {
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error": gin.H{
+					"type":    "upstream_error",
+					"message": "Upstream request failed",
+				},
+			})
+		}
+		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 400 {
+		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, "", nil) {
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+			resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			s.handleFailoverSideEffects(ctx, resp, account)
+			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: bodyBytes}
+		}
+		return s.handleErrorResponse(ctx, resp, c, account, body)
+	}
+
+	maxBytes := resolveUpstreamResponseReadLimit(s.cfg)
+	respBody, err := readUpstreamResponseBodyLimited(resp.Body, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	usageValue, _ := extractOpenAIUsageFromJSONBytes(respBody)
+	imageCount := inferOpenAIImagesResponseCount(respBody)
+	imageSize := normalizeOpenAIImageSize(gjson.GetBytes(body, "size").String())
+	if imageSize == "" {
+		imageSize = "1K"
+	}
+
+	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	contentType := "application/json"
+	if s.cfg != nil && !s.cfg.Security.ResponseHeaders.Enabled {
+		if upstreamType := resp.Header.Get("Content-Type"); upstreamType != "" {
+			contentType = upstreamType
+		}
+	}
+	c.Data(resp.StatusCode, contentType, respBody)
+
+	return &OpenAIForwardResult{
+		RequestID:       resp.Header.Get("x-request-id"),
+		Usage:           usageValue,
+		Model:           originalModel,
+		UpstreamModel:   upstreamModel,
+		Stream:          false,
+		OpenAIWSMode:    false,
+		ImageCount:      imageCount,
+		ImageSize:       imageSize,
+		ResponseHeaders: resp.Header.Clone(),
+		Duration:        time.Since(startTime),
+	}, nil
+}
+
+func isOpenAIImagesMultipartRequest(c *gin.Context) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(c.Request.Header.Get("Content-Type"))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(mediaType, "multipart/form-data")
+}
+
+func inferOpenAIImagesResponseCount(body []byte) int {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return 0
+	}
+	data := gjson.GetBytes(body, "data")
+	if data.IsArray() {
+		return len(data.Array())
+	}
+	output := gjson.GetBytes(body, "output")
+	if output.IsArray() {
+		count := 0
+		for _, item := range output.Array() {
+			if strings.Contains(item.Get("type").String(), "image") || item.Get("result").Exists() || item.Get("image_url").Exists() {
+				count++
+			}
+		}
+		return count
+	}
+	return 0
+}
+
+func normalizeOpenAIImageSize(size string) string {
+	size = strings.ToUpper(strings.TrimSpace(size))
+	switch {
+	case strings.Contains(size, "4096") || strings.Contains(size, "4K"):
+		return "4K"
+	case strings.Contains(size, "2048") || strings.Contains(size, "2K"):
+		return "2K"
+	case strings.Contains(size, "1024") || strings.Contains(size, "1K"):
+		return "1K"
+	default:
+		return ""
+	}
+}
+
 func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	ctx context.Context,
 	c *gin.Context,
@@ -3897,6 +4097,10 @@ func (s *OpenAIGatewayService) parseSSEUsageBytes(data []byte, usage *OpenAIUsag
 	usage.InputTokens = int(gjson.GetBytes(data, "response.usage.input_tokens").Int())
 	usage.OutputTokens = int(gjson.GetBytes(data, "response.usage.output_tokens").Int())
 	usage.CacheReadInputTokens = int(gjson.GetBytes(data, "response.usage.input_tokens_details.cached_tokens").Int())
+	usage.ImageOutputTokens = int(gjson.GetBytes(data, "response.usage.output_tokens_details.image_tokens").Int())
+	if usage.ImageOutputTokens == 0 {
+		usage.ImageOutputTokens = int(gjson.GetBytes(data, "response.usage.output_tokens_details.image_output_tokens").Int())
+	}
 }
 
 func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
@@ -3908,11 +4112,18 @@ func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
 		"usage.input_tokens",
 		"usage.output_tokens",
 		"usage.input_tokens_details.cached_tokens",
+		"usage.output_tokens_details.image_tokens",
+		"usage.output_tokens_details.image_output_tokens",
 	)
+	imageOutputTokens := int(values[3].Int())
+	if imageOutputTokens == 0 {
+		imageOutputTokens = int(values[4].Int())
+	}
 	return OpenAIUsage{
 		InputTokens:          int(values[0].Int()),
 		OutputTokens:         int(values[1].Int()),
 		CacheReadInputTokens: int(values[2].Int()),
+		ImageOutputTokens:    imageOutputTokens,
 	}, true
 }
 
@@ -4189,6 +4400,26 @@ func buildOpenAIResponsesURL(base string) string {
 	return normalized + "/v1/responses"
 }
 
+func buildOpenAIImagesURL(base string, endpoint string) string {
+	normalized := strings.TrimRight(strings.TrimSpace(base), "/")
+	normalized = strings.TrimSuffix(normalized, "/v1/images/generations")
+	normalized = strings.TrimSuffix(normalized, "/v1/images/edits")
+	endpoint = normalizeOpenAIImagesEndpoint(endpoint)
+	if strings.HasSuffix(normalized, "/v1") {
+		return normalized + strings.TrimPrefix(endpoint, "/v1")
+	}
+	return normalized + endpoint
+}
+
+func normalizeOpenAIImagesEndpoint(endpoint string) string {
+	switch strings.TrimSpace(endpoint) {
+	case "/v1/images/edits":
+		return "/v1/images/edits"
+	default:
+		return "/v1/images/generations"
+	}
+}
+
 func trimOpenAIEncryptedReasoningItems(reqBody map[string]any) bool {
 	if len(reqBody) == 0 {
 		return false
@@ -4415,7 +4646,8 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 
 	// 跳过所有 token 均为零的用量记录——上游未返回 usage 时不应写入数据库
 	if result.Usage.InputTokens == 0 && result.Usage.OutputTokens == 0 &&
-		result.Usage.CacheCreationInputTokens == 0 && result.Usage.CacheReadInputTokens == 0 {
+		result.Usage.CacheCreationInputTokens == 0 && result.Usage.CacheReadInputTokens == 0 &&
+		result.ImageCount <= 0 {
 		return nil
 	}
 
@@ -4469,7 +4701,17 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if result.ServiceTier != nil {
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
 	}
-	if s.resolver != nil && apiKey.Group != nil {
+	if result.ImageCount > 0 && result.Usage.InputTokens == 0 && result.Usage.OutputTokens == 0 && result.Usage.ImageOutputTokens == 0 {
+		var groupConfig *ImagePriceConfig
+		if apiKey.Group != nil {
+			groupConfig = &ImagePriceConfig{
+				Price1K: apiKey.Group.ImagePrice1K,
+				Price2K: apiKey.Group.ImagePrice2K,
+				Price4K: apiKey.Group.ImagePrice4K,
+			}
+		}
+		cost = s.billingService.CalculateImageCost(billingModel, result.ImageSize, result.ImageCount, groupConfig, multiplier)
+	} else if s.resolver != nil && apiKey.Group != nil {
 		gid := apiKey.Group.ID
 		cost, err = s.billingService.CalculateCostUnified(CostInput{
 			Ctx:            ctx,
@@ -4523,6 +4765,8 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		CacheCreationTokens: result.Usage.CacheCreationInputTokens,
 		CacheReadTokens:     result.Usage.CacheReadInputTokens,
 		ImageOutputTokens:   result.Usage.ImageOutputTokens,
+		ImageCount:          result.ImageCount,
+		ImageSize:           optionalTrimmedStringPtr(result.ImageSize),
 	}
 	if cost != nil {
 		usageLog.InputCost = cost.InputCost

@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -273,6 +274,9 @@ func normalizeCodexModel(model string) string {
 	if strings.Contains(normalized, "gpt-5.1") || strings.Contains(normalized, "gpt 5.1") {
 		return "gpt-5.1"
 	}
+	if newerModel := normalizeNewerGPT5MinorModel(normalized); newerModel != "" {
+		return newerModel
+	}
 	if strings.Contains(normalized, "codex") {
 		return "gpt-5.1-codex"
 	}
@@ -281,6 +285,28 @@ func normalizeCodexModel(model string) string {
 	}
 
 	return "gpt-5.1"
+}
+
+func normalizeNewerGPT5MinorModel(normalized string) string {
+	for _, prefix := range []string{"gpt-5.", "gpt 5."} {
+		idx := strings.Index(normalized, prefix)
+		if idx < 0 {
+			continue
+		}
+		rest := normalized[idx+len(prefix):]
+		end := 0
+		for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+			end++
+		}
+		if end == 0 {
+			continue
+		}
+		minor, err := strconv.Atoi(rest[:end])
+		if err == nil && minor >= 5 {
+			return "gpt-5." + rest[:end]
+		}
+	}
+	return ""
 }
 
 func normalizeOpenAIModelForUpstream(account *Account, model string) string {

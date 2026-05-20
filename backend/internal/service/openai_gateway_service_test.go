@@ -189,6 +189,145 @@ func TestOpenAIGatewayService_GenerateSessionHash_Priority(t *testing.T) {
 	}
 }
 
+func TestBuildOpenAIImagesURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		base     string
+		endpoint string
+		want     string
+	}{
+		{"default v1 base generations", "https://api.openai.com/v1", "/v1/images/generations", "https://api.openai.com/v1/images/generations"},
+		{"root base edits", "https://api.openai.com", "/v1/images/edits", "https://api.openai.com/v1/images/edits"},
+		{"custom base trims trailing slash", "https://example.com/openai/", "/v1/images/generations", "https://example.com/openai/v1/images/generations"},
+		{"already images base is replaced", "https://example.com/v1/images/generations", "/v1/images/edits", "https://example.com/v1/images/edits"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, buildOpenAIImagesURL(tt.base, tt.endpoint))
+		})
+	}
+}
+
+func TestExtractOpenAIUsageFromJSONBytes_ParsesImageOutputTokens(t *testing.T) {
+	body := []byte(`{
+		"usage": {
+			"input_tokens": 12,
+			"output_tokens": 345,
+			"input_tokens_details": {"cached_tokens": 3},
+			"output_tokens_details": {"image_tokens": 321}
+		}
+	}`)
+
+	usage, ok := extractOpenAIUsageFromJSONBytes(body)
+	require.True(t, ok)
+	require.Equal(t, 12, usage.InputTokens)
+	require.Equal(t, 345, usage.OutputTokens)
+	require.Equal(t, 3, usage.CacheReadInputTokens)
+	require.Equal(t, 321, usage.ImageOutputTokens)
+}
+
+func TestOpenAIGatewayServiceForwardImages_UsesImagesEndpointAndCapturesImageMetadata(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"img_req"}},
+		Body: io.NopCloser(strings.NewReader(`{
+			"created": 1,
+			"data": [{"b64_json": "aaa"}, {"b64_json": "bbb"}],
+			"usage": {
+				"input_tokens": 5,
+				"output_tokens": 20,
+				"output_tokens_details": {"image_tokens": 18}
+			}
+		}`)),
+	}
+	upstream := &httpUpstreamRecorder{resp: resp}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Security: config.SecurityConfig{
+				URLAllowlist: config.URLAllowlistConfig{Enabled: false},
+			},
+		},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-api",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-test"},
+		Concurrency: 1,
+	}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, []byte(`{"model":"gpt-image-2","prompt":"draw","size":"2048x2048"}`), "gpt-image-2", "/v1/images/generations")
+
+	require.NoError(t, err)
+	require.Equal(t, "https://api.openai.com/v1/images/generations", upstream.lastReq.URL.String())
+	require.Equal(t, "Bearer sk-test", upstream.lastReq.Header.Get("authorization"))
+	require.Equal(t, 2, result.ImageCount)
+	require.Equal(t, "2K", result.ImageSize)
+	require.Equal(t, 18, result.Usage.ImageOutputTokens)
+	require.JSONEq(t, `{"model":"gpt-image-2","prompt":"draw","size":"2048x2048"}`, string(upstream.lastBody))
+	require.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestOpenAIGatewayServiceForwardImages_PreservesMultipartEditsBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := strings.Join([]string{
+		"--test-boundary",
+		`Content-Disposition: form-data; name="model"`,
+		"",
+		"gpt-image-2",
+		"--test-boundary",
+		`Content-Disposition: form-data; name="image"; filename="input.png"`,
+		"Content-Type: image/png",
+		"",
+		"PNGDATA",
+		"--test-boundary--",
+		"",
+	}, "\r\n")
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "multipart/form-data; boundary=test-boundary")
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"data":[{"b64_json":"edited"}]}`)),
+	}
+	upstream := &httpUpstreamRecorder{resp: resp}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Security: config.SecurityConfig{
+				URLAllowlist: config.URLAllowlistConfig{Enabled: false},
+			},
+		},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-api",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-test"},
+		Concurrency: 1,
+	}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, []byte(body), "gpt-image-2", "/v1/images/edits")
+
+	require.NoError(t, err)
+	require.Equal(t, "https://api.openai.com/v1/images/edits", upstream.lastReq.URL.String())
+	require.Contains(t, upstream.lastReq.Header.Get("Content-Type"), "multipart/form-data; boundary=test-boundary")
+	require.Equal(t, body, string(upstream.lastBody))
+	require.Equal(t, 1, result.ImageCount)
+}
+
 func TestOpenAIGatewayService_GenerateSessionHash_UsesXXHash64(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
