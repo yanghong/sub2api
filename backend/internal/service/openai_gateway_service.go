@@ -2448,6 +2448,9 @@ func (s *OpenAIGatewayService) ForwardImages(ctx context.Context, c *gin.Context
 	if account == nil {
 		return nil, errors.New("account is nil")
 	}
+	if account.Type == AccountTypeOAuth {
+		return s.forwardImagesViaCodexResponses(ctx, c, account, body, originalModel, endpoint, startTime)
+	}
 	if account.Type != AccountTypeAPIKey {
 		if c != nil {
 			c.JSON(http.StatusBadRequest, gin.H{
@@ -2591,6 +2594,324 @@ func (s *OpenAIGatewayService) ForwardImages(ctx context.Context, c *gin.Context
 		ResponseHeaders: resp.Header.Clone(),
 		Duration:        time.Since(startTime),
 	}, nil
+}
+
+func (s *OpenAIGatewayService) forwardImagesViaCodexResponses(ctx context.Context, c *gin.Context, account *Account, body []byte, originalModel string, endpoint string, startTime time.Time) (*OpenAIForwardResult, error) {
+	if normalizeOpenAIImagesEndpoint(endpoint) != "/v1/images/generations" {
+		if c != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{
+					"type":    "invalid_request_error",
+					"message": "OpenAI image edits via Codex OAuth accounts are not supported",
+				},
+			})
+		}
+		return nil, errors.New("openai image edits via oauth account are not supported")
+	}
+	if isOpenAIImagesMultipartRequest(c) {
+		if c != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": gin.H{
+					"type":    "invalid_request_error",
+					"message": "OpenAI Images API multipart requests require OpenAI API key accounts",
+				},
+			})
+		}
+		return nil, errors.New("openai images multipart oauth request is not supported")
+	}
+
+	reqBody, err := getOpenAIRequestBodyMap(c, body)
+	if err != nil {
+		return nil, err
+	}
+	responsesBody, upstreamModel, imageSize := buildOpenAICodexImageGenerationRequest(reqBody)
+	if upstreamModel == "" {
+		upstreamModel = "gpt-5.4"
+	}
+	responsesBytes, err := json.Marshal(responsesBody)
+	if err != nil {
+		return nil, fmt.Errorf("serialize codex image request body: %w", err)
+	}
+
+	token, _, err := s.GetAccessToken(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	req, err := s.buildUpstreamRequest(ctx, c, account, responsesBytes, token, false, "", true)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("accept", "text/event-stream")
+
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	setOpsUpstreamRequestBody(c, responsesBytes)
+	upstreamStart := time.Now()
+	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+	if err != nil {
+		safeErr := sanitizeUpstreamErrorMessage(err.Error())
+		setOpsUpstreamError(c, 0, safeErr, "")
+		if c != nil {
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error": gin.H{
+					"type":    "upstream_error",
+					"message": "Upstream request failed",
+				},
+			})
+		}
+		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 400 {
+		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, "", nil) {
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+			resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			s.handleFailoverSideEffects(ctx, resp, account)
+			return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: bodyBytes}
+		}
+		return s.handleErrorResponse(ctx, resp, c, account, responsesBytes)
+	}
+
+	maxBytes := resolveUpstreamResponseReadLimit(s.cfg)
+	respBody, err := readUpstreamResponseBodyLimited(resp.Body, maxBytes)
+	if err != nil {
+		return nil, err
+	}
+	imagesResp, imageCount, err := convertCodexImageGenerationResponse(respBody)
+	if err != nil {
+		if c != nil {
+			c.JSON(http.StatusBadGateway, gin.H{
+				"error": gin.H{
+					"type":    "upstream_error",
+					"message": err.Error(),
+				},
+			})
+		}
+		return nil, err
+	}
+	usageValue, _ := extractOpenAIUsageFromCodexImageResponse(respBody)
+	if imageSize == "" {
+		imageSize = "1K"
+	}
+	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	c.JSON(resp.StatusCode, imagesResp)
+
+	return &OpenAIForwardResult{
+		RequestID:       resp.Header.Get("x-request-id"),
+		Usage:           usageValue,
+		Model:           originalModel,
+		UpstreamModel:   upstreamModel,
+		Stream:          false,
+		OpenAIWSMode:    false,
+		ImageCount:      imageCount,
+		ImageSize:       imageSize,
+		ResponseHeaders: resp.Header.Clone(),
+		Duration:        time.Since(startTime),
+	}, nil
+}
+
+func buildOpenAICodexImageGenerationRequest(reqBody map[string]any) (map[string]any, string, string) {
+	prompt := strings.TrimSpace(stringFromAny(reqBody["prompt"]))
+	if prompt == "" {
+		prompt = strings.TrimSpace(stringFromAny(reqBody["input"]))
+	}
+	upstreamModel := resolveCodexImageGenerationModel(strings.TrimSpace(stringFromAny(reqBody["model"])))
+	tool := map[string]any{
+		"type":   "image_generation",
+		"action": "generate",
+	}
+	for _, key := range []string{"size", "quality", "background", "output_format"} {
+		if value := strings.TrimSpace(stringFromAny(reqBody[key])); value != "" {
+			tool[key] = value
+		}
+	}
+	return map[string]any{
+		"model":        upstreamModel,
+		"stream":       true,
+		"store":        false,
+		"instructions": "Use the image generation tool. Return no explanatory text.",
+		"input": []any{
+			map[string]any{
+				"type":    "message",
+				"role":    "user",
+				"content": prompt,
+			},
+		},
+		"tools": []any{tool},
+	}, upstreamModel, normalizeOpenAIImageSize(stringFromAny(reqBody["size"]))
+}
+
+func stringFromAny(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case fmt.Stringer:
+		return v.String()
+	default:
+		return ""
+	}
+}
+
+func resolveCodexImageGenerationModel(requestedModel string) string {
+	normalized := strings.ToLower(strings.TrimSpace(requestedModel))
+	if strings.HasPrefix(normalized, "gpt-") && !strings.HasPrefix(normalized, "gpt-image-") && !strings.HasPrefix(normalized, "dall-e-") {
+		return normalizeCodexModel(normalized)
+	}
+	return "gpt-5.4"
+}
+
+func convertCodexImageGenerationResponse(body []byte) (gin.H, int, error) {
+	if isLikelySSEBody(body) {
+		return convertCodexImageGenerationSSEResponse(body)
+	}
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return nil, 0, errors.New("Invalid image generation response from upstream")
+	}
+	data := make([]gin.H, 0)
+	output := gjson.GetBytes(body, "output")
+	if output.IsArray() {
+		for _, item := range output.Array() {
+			if item.Get("type").String() != "image_generation_call" {
+				continue
+			}
+			result := item.Get("result").String()
+			if strings.TrimSpace(result) == "" {
+				continue
+			}
+			data = append(data, gin.H{"b64_json": result})
+		}
+	}
+	if len(data) == 0 {
+		return nil, 0, errors.New("No image data returned from upstream")
+	}
+	resp := gin.H{
+		"created": time.Now().Unix(),
+		"data":    data,
+	}
+	if usage := gjson.GetBytes(body, "usage"); usage.Exists() {
+		var usageAny any
+		if err := json.Unmarshal([]byte(usage.Raw), &usageAny); err == nil {
+			resp["usage"] = usageAny
+		}
+	}
+	return resp, len(data), nil
+}
+
+func convertCodexImageGenerationSSEResponse(body []byte) (gin.H, int, error) {
+	if len(body) == 0 {
+		return nil, 0, errors.New("Invalid image generation response from upstream")
+	}
+	data := make([]gin.H, 0)
+	seenResults := make(map[string]struct{})
+	var usageAny any
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	buf := getSSEScannerBuf64K()
+	defer putSSEScannerBuf64K(buf)
+	scanner.Buffer(buf[:], 16*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" || !gjson.Valid(payload) {
+			continue
+		}
+		jsonValue := gjson.Parse(payload)
+		for _, result := range collectCodexImageGenerationResults(jsonValue) {
+			if _, seen := seenResults[result]; seen {
+				continue
+			}
+			seenResults[result] = struct{}{}
+			data = append(data, gin.H{"b64_json": result})
+		}
+		if usage := jsonValue.Get("usage"); usage.Exists() {
+			_ = json.Unmarshal([]byte(usage.Raw), &usageAny)
+		}
+		if usage := jsonValue.Get("response.usage"); usage.Exists() {
+			_ = json.Unmarshal([]byte(usage.Raw), &usageAny)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, 0, fmt.Errorf("read image generation stream: %w", err)
+	}
+	if len(data) == 0 {
+		return nil, 0, errors.New("No image data returned from upstream")
+	}
+	resp := gin.H{
+		"created": time.Now().Unix(),
+		"data":    data,
+	}
+	if usageAny != nil {
+		resp["usage"] = usageAny
+	}
+	return resp, len(data), nil
+}
+
+func collectCodexImageGenerationResults(value gjson.Result) []string {
+	results := make([]string, 0)
+	var walk func(gjson.Result)
+	walk = func(v gjson.Result) {
+		if !v.Exists() {
+			return
+		}
+		if v.IsObject() {
+			if v.Get("type").String() == "image_generation_call" {
+				if result := strings.TrimSpace(v.Get("result").String()); result != "" {
+					results = append(results, result)
+				}
+			}
+			v.ForEach(func(_, child gjson.Result) bool {
+				walk(child)
+				return true
+			})
+			return
+		}
+		if v.IsArray() {
+			for _, child := range v.Array() {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	return results
+}
+
+func extractOpenAIUsageFromCodexImageResponse(body []byte) (OpenAIUsage, bool) {
+	if !isLikelySSEBody(body) {
+		return extractOpenAIUsageFromJSONBytes(body)
+	}
+	var usage OpenAIUsage
+	ok := false
+	scanner := bufio.NewScanner(bytes.NewReader(body))
+	buf := getSSEScannerBuf64K()
+	defer putSSEScannerBuf64K(buf)
+	scanner.Buffer(buf[:], 16*1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" || !gjson.Valid(payload) {
+			continue
+		}
+		if parsed, parsedOK := extractOpenAIUsageFromJSONBytes([]byte(payload)); parsedOK {
+			usage = parsed
+			ok = true
+		}
+		if responseUsage := gjson.Get(payload, "response.usage"); responseUsage.Exists() {
+			if parsed, parsedOK := extractOpenAIUsageFromJSONBytes([]byte(`{"usage":` + responseUsage.Raw + `}`)); parsedOK {
+				usage = parsed
+				ok = true
+			}
+		}
+	}
+	return usage, ok
 }
 
 func isOpenAIImagesMultipartRequest(c *gin.Context) bool {
@@ -4189,6 +4510,11 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 func isEventStreamResponse(header http.Header) bool {
 	contentType := strings.ToLower(header.Get("Content-Type"))
 	return strings.Contains(contentType, "text/event-stream")
+}
+
+func isLikelySSEBody(body []byte) bool {
+	trimmed := bytes.TrimSpace(body)
+	return bytes.HasPrefix(trimmed, []byte("event:")) || bytes.HasPrefix(trimmed, []byte("data:"))
 }
 
 func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string) (*OpenAIUsage, error) {
