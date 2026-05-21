@@ -27,6 +27,15 @@ func forwardResultBillingModel(requestedModel, upstreamModel string) string {
 	return strings.TrimSpace(upstreamModel)
 }
 
+func usageBillingFallbackModel(primaryModel, upstreamModel string) string {
+	primary := strings.TrimSpace(primaryModel)
+	upstream := strings.TrimSpace(upstreamModel)
+	if upstream == "" || upstream == primary {
+		return ""
+	}
+	return upstream
+}
+
 func optionalInt64Ptr(v int64) *int64 {
 	if v == 0 {
 		return nil

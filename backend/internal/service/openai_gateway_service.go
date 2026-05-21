@@ -5027,6 +5027,22 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if result.ServiceTier != nil {
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
 	}
+	calculateTokenCost := func(model string) (*CostBreakdown, error) {
+		if s.resolver != nil && apiKey.Group != nil {
+			gid := apiKey.Group.ID
+			return s.billingService.CalculateCostUnified(CostInput{
+				Ctx:            ctx,
+				Model:          model,
+				GroupID:        &gid,
+				Tokens:         tokens,
+				RequestCount:   1,
+				RateMultiplier: multiplier,
+				ServiceTier:    serviceTier,
+				Resolver:       s.resolver,
+			})
+		}
+		return s.billingService.CalculateCostWithServiceTier(model, tokens, multiplier, serviceTier)
+	}
 	if result.ImageCount > 0 && result.Usage.InputTokens == 0 && result.Usage.OutputTokens == 0 && result.Usage.ImageOutputTokens == 0 {
 		var groupConfig *ImagePriceConfig
 		if apiKey.Group != nil {
@@ -5037,20 +5053,17 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 			}
 		}
 		cost = s.billingService.CalculateImageCost(billingModel, result.ImageSize, result.ImageCount, groupConfig, multiplier)
-	} else if s.resolver != nil && apiKey.Group != nil {
-		gid := apiKey.Group.ID
-		cost, err = s.billingService.CalculateCostUnified(CostInput{
-			Ctx:            ctx,
-			Model:          billingModel,
-			GroupID:        &gid,
-			Tokens:         tokens,
-			RequestCount:   1,
-			RateMultiplier: multiplier,
-			ServiceTier:    serviceTier,
-			Resolver:       s.resolver,
-		})
 	} else {
-		cost, err = s.billingService.CalculateCostWithServiceTier(billingModel, tokens, multiplier, serviceTier)
+		cost, err = calculateTokenCost(billingModel)
+		if err != nil {
+			if fallbackModel := usageBillingFallbackModel(billingModel, result.UpstreamModel); fallbackModel != "" {
+				if fallbackCost, fallbackErr := calculateTokenCost(fallbackModel); fallbackErr == nil {
+					billingModel = fallbackModel
+					cost = fallbackCost
+					err = nil
+				}
+			}
+		}
 	}
 	if err != nil {
 		cost = &CostBreakdown{ActualCost: 0}
