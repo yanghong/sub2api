@@ -49,6 +49,28 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		})
 		return nil, fmt.Errorf("missing model in request")
 	}
+	if toolType, ok := firstResponsesToolTypeRequiringNativeResponses(responsesReq.Tools); ok {
+		msg := fmt.Sprintf("Responses tool %q requires an upstream that supports /v1/responses", toolType)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"type":    "invalid_request_error",
+				"message": msg,
+				"param":   "tools",
+			},
+		})
+		return nil, fmt.Errorf("native responses tool %q cannot be forwarded via chat completions", toolType)
+	}
+	if toolChoiceType, ok := responsesToolChoiceTypeRequiringNativeResponses(responsesReq.ToolChoice); ok {
+		msg := fmt.Sprintf("Responses tool_choice %q requires an upstream that supports /v1/responses", toolChoiceType)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"type":    "invalid_request_error",
+				"message": msg,
+				"param":   "tool_choice",
+			},
+		})
+		return nil, fmt.Errorf("native responses tool_choice %q cannot be forwarded via chat completions", toolChoiceType)
+	}
 
 	clientStream := responsesReq.Stream
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, originalModel)
@@ -203,6 +225,39 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		return s.streamChatCompletionsAsResponses(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
 	return s.bufferChatCompletionsAsResponses(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+}
+
+func firstResponsesToolTypeRequiringNativeResponses(tools []apicompat.ResponsesTool) (string, bool) {
+	for _, tool := range tools {
+		toolType := strings.TrimSpace(tool.Type)
+		if toolType != "" && toolType != "function" {
+			return toolType, true
+		}
+	}
+	return "", false
+}
+
+func responsesToolChoiceTypeRequiringNativeResponses(raw json.RawMessage) (string, bool) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", false
+	}
+	var choice string
+	if err := json.Unmarshal(raw, &choice); err == nil {
+		return "", false
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return "", false
+	}
+	if err := json.Unmarshal(obj["type"], &choice); err != nil {
+		return "", false
+	}
+	choice = strings.TrimSpace(choice)
+	if choice != "" && choice != "function" {
+		return choice, true
+	}
+	return "", false
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
