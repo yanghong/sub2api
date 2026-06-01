@@ -113,6 +113,32 @@ func TestChatCompletionsToResponses_ToolCalls(t *testing.T) {
 	assert.Equal(t, "ping", resp.Tools[0].Name)
 }
 
+func TestChatCompletionsToResponses_WebSearchTool(t *testing.T) {
+	req := &ChatCompletionsRequest{
+		Model: "gpt-5.1",
+		Messages: []ChatMessage{
+			{Role: "user", Content: json.RawMessage(`"Search the web"`)},
+		},
+		Tools: []ChatTool{
+			{
+				Type:              "web_search",
+				SearchContextSize: "low",
+				UserLocation:      json.RawMessage(`{"type":"approximate","country":"US"}`),
+			},
+		},
+		ToolChoice: json.RawMessage(`{"type":"web_search"}`),
+	}
+
+	resp, err := ChatCompletionsToResponses(req)
+	require.NoError(t, err)
+
+	require.Len(t, resp.Tools, 1)
+	assert.Equal(t, "web_search", resp.Tools[0].Type)
+	assert.Equal(t, "low", resp.Tools[0].SearchContextSize)
+	assert.JSONEq(t, `{"type":"approximate","country":"US"}`, string(resp.Tools[0].UserLocation))
+	assert.JSONEq(t, `{"type":"web_search"}`, string(resp.ToolChoice))
+}
+
 func TestChatCompletionsToResponses_MaxTokens(t *testing.T) {
 	t.Run("max_tokens", func(t *testing.T) {
 		maxTokens := 100

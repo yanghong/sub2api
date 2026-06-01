@@ -411,6 +411,14 @@ func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []R
 	var out []ResponsesTool
 
 	for _, t := range tools {
+		if isNativeWebSearchToolType(t.Type) {
+			out = append(out, ResponsesTool{
+				Type:              strings.TrimSpace(t.Type),
+				SearchContextSize: t.SearchContextSize,
+				UserLocation:      t.UserLocation,
+			})
+			continue
+		}
 		if t.Type != "function" || t.Function == nil {
 			continue
 		}
@@ -437,6 +445,11 @@ func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []R
 	}
 
 	return out
+}
+
+func isNativeWebSearchToolType(toolType string) bool {
+	toolType = strings.TrimSpace(toolType)
+	return strings.HasPrefix(toolType, "web_search") || toolType == "google_search"
 }
 
 // convertChatFunctionCallToToolChoice maps the legacy function_call field to a
