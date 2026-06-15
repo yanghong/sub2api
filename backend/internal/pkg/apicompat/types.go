@@ -248,11 +248,13 @@ type ResponsesContentPart struct {
 
 // ResponsesTool describes a tool in the Responses API.
 type ResponsesTool struct {
-	Type        string          `json:"type"` // "function" | "web_search" | "local_shell" etc.
-	Name        string          `json:"name,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
-	Strict      *bool           `json:"strict,omitempty"`
+	Type              string          `json:"type"` // "function" | "web_search" | "local_shell" etc.
+	Name              string          `json:"name,omitempty"`
+	Description       string          `json:"description,omitempty"`
+	Parameters        json.RawMessage `json:"parameters,omitempty"`
+	Strict            *bool           `json:"strict,omitempty"`
+	SearchContextSize string          `json:"search_context_size,omitempty"`
+	UserLocation      json.RawMessage `json:"user_location,omitempty"`
 }
 
 // ResponsesResponse is the non-streaming response from POST /v1/responses.
@@ -477,8 +479,10 @@ type ChatImageURL struct {
 
 // ChatTool describes a tool available to the model.
 type ChatTool struct {
-	Type     string        `json:"type"` // "function"
-	Function *ChatFunction `json:"function,omitempty"`
+	Type              string          `json:"type"` // "function" | "web_search" | etc.
+	Function          *ChatFunction   `json:"function,omitempty"`
+	SearchContextSize string          `json:"search_context_size,omitempty"`
+	UserLocation      json.RawMessage `json:"user_location,omitempty"`
 }
 
 // ChatFunction describes a function tool definition.
