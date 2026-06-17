@@ -765,6 +765,9 @@ export default {
       copy: '复制',
       copied: '已复制',
       note: '这些环境变量将在当前终端会话中生效。如需永久配置，请将其添加到 ~/.bashrc、~/.zshrc 或相应的配置文件中。',
+      setupScriptTitle: '一键配置脚本',
+      setupScriptWarning: '脚本包含当前 API 密钥，并会备份后写入本机 Codex 配置。请勿转发给他人。',
+      downloadSetupScript: '下载配置脚本',
       noGroupTitle: '请先分配分组',
       noGroupDescription:
         '此 API 密钥尚未分配分组，请先在密钥列表中点击分组列进行分配，然后才能查看使用配置。',
