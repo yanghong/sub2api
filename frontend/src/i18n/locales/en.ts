@@ -770,6 +770,14 @@ export default {
       setupScriptTitle: 'One-click setup script',
       setupScriptWarning: 'The script contains this API key and writes local Codex config after backing up existing files. Do not share it with others.',
       downloadSetupScript: 'Download setup script',
+      setupScriptUsageTitle: 'Script usage',
+      setupScriptUsageDownload: 'Download the setup script.',
+      setupScriptUsageRun: 'Open Terminal or PowerShell, then run the command below.',
+      setupScriptUsageRestart: 'Restart Codex CLI after the script finishes.',
+      setupTabs: {
+        manual: 'Tutorial',
+        script: 'One-click setup',
+      },
       noGroupTitle: 'Please assign a group first',
       noGroupDescription: 'This API key has not been assigned to a group. Please click the group column in the key list to assign one before viewing the configuration.',
       openai: {

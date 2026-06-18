@@ -224,6 +224,14 @@ describe('UseKeyModal', () => {
       }
     })
 
+    const scriptTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.setupTabs.script')
+    )
+
+    expect(scriptTab).toBeDefined()
+    await scriptTab!.trigger('click')
+    await nextTick()
+
     const downloadButton = wrapper.findAll('button').find((button) =>
       button.text().includes('keys.useKeyModal.downloadSetupScript')
     )
@@ -245,5 +253,45 @@ describe('UseKeyModal', () => {
     expect(script).toContain('"OPENAI_API_KEY": "sk-test"')
     expect(script).toContain('chmod 600 "$CODEX_DIR/auth.json"')
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:sub2api-codex-setup')
+  })
+
+  it('separates manual Codex tutorial from one-click setup script instructions', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'openai'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('keys.useKeyModal.setupTabs.manual')
+    expect(wrapper.text()).toContain('keys.useKeyModal.setupTabs.script')
+    expect(wrapper.text()).not.toContain('keys.useKeyModal.downloadSetupScript')
+    expect(wrapper.text()).toContain('model_provider = "OpenAI"')
+
+    const scriptTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.setupTabs.script')
+    )
+
+    expect(scriptTab).toBeDefined()
+    await scriptTab!.trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('keys.useKeyModal.downloadSetupScript')
+    expect(wrapper.text()).toContain('keys.useKeyModal.setupScriptUsageTitle')
+    expect(wrapper.text()).toContain('chmod +x ~/Downloads/sub2api-codex-setup.sh')
+    expect(wrapper.text()).toContain('~/Downloads/sub2api-codex-setup.sh')
+    expect(wrapper.text()).not.toContain('model_provider = "OpenAI"')
   })
 })
