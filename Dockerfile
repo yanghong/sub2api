@@ -46,6 +46,7 @@ ARG GOSUMDB
 
 ENV GOPROXY=${GOPROXY}
 ENV GOSUMDB=${GOSUMDB}
+ENV GOMAXPROCS=1
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
