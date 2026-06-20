@@ -72,31 +72,75 @@
           </nav>
         </div>
 
+        <!-- Setup Mode Tabs -->
+        <div v-if="canDownloadSetupScript" class="rounded-lg border border-gray-200 bg-gray-50 p-1 dark:border-dark-700 dark:bg-dark-900/50">
+          <nav class="grid grid-cols-2 gap-1" aria-label="Setup mode">
+            <button
+              type="button"
+              @click="activeSetupTab = 'manual'"
+              :class="[
+                'rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                activeSetupTab === 'manual'
+                  ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-800 dark:text-white'
+                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              ]"
+            >
+              {{ t('keys.useKeyModal.setupTabs.manual') }}
+            </button>
+            <button
+              type="button"
+              @click="activeSetupTab = 'script'"
+              :class="[
+                'rounded-md px-3 py-2 text-sm font-medium transition-colors',
+                activeSetupTab === 'script'
+                  ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-800 dark:text-white'
+                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+              ]"
+            >
+              {{ t('keys.useKeyModal.setupTabs.script') }}
+            </button>
+          </nav>
+        </div>
+
         <!-- One-click setup script -->
         <div
-          v-if="canDownloadSetupScript"
-          class="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20 sm:flex-row sm:items-center sm:justify-between"
+          v-if="showSetupScriptPanel"
+          class="space-y-4 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20"
         >
-          <div class="min-w-0">
-            <p class="text-sm font-medium text-amber-900 dark:text-amber-100">
-              {{ t('keys.useKeyModal.setupScriptTitle') }}
-            </p>
-            <p class="mt-1 text-sm text-amber-700 dark:text-amber-300">
-              {{ t('keys.useKeyModal.setupScriptWarning') }}
-            </p>
+          <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div class="min-w-0">
+              <p class="text-sm font-medium text-amber-900 dark:text-amber-100">
+                {{ t('keys.useKeyModal.setupScriptTitle') }}
+              </p>
+              <p class="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                {{ t('keys.useKeyModal.setupScriptWarning') }}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="btn btn-primary shrink-0 inline-flex items-center gap-2"
+              @click="downloadSetupScript"
+            >
+              <Icon name="download" size="sm" />
+              {{ t('keys.useKeyModal.downloadSetupScript') }}
+            </button>
           </div>
-          <button
-            type="button"
-            class="btn btn-primary shrink-0 inline-flex items-center gap-2"
-            @click="downloadSetupScript"
-          >
-            <Icon name="download" size="sm" />
-            {{ t('keys.useKeyModal.downloadSetupScript') }}
-          </button>
+
+          <div class="space-y-3 border-t border-amber-200 pt-3 dark:border-amber-800">
+            <p class="text-sm font-medium text-amber-900 dark:text-amber-100">
+              {{ t('keys.useKeyModal.setupScriptUsageTitle') }}
+            </p>
+            <ol class="list-decimal space-y-1 pl-5 text-sm text-amber-800 dark:text-amber-200">
+              <li>{{ t('keys.useKeyModal.setupScriptUsageDownload') }}</li>
+              <li>{{ t('keys.useKeyModal.setupScriptUsageRun') }}</li>
+              <li>{{ t('keys.useKeyModal.setupScriptUsageRestart') }}</li>
+            </ol>
+            <pre class="overflow-x-auto rounded-lg bg-gray-900 p-3 text-sm font-mono text-gray-100"><code>{{ currentSetupUsageCommand }}</code></pre>
+          </div>
         </div>
 
         <!-- Code Blocks (Stacked for multi-file platforms) -->
-        <div class="space-y-4">
+        <div v-if="showManualConfig" class="space-y-4">
           <div
             v-for="(file, index) in currentFiles"
             :key="index"
@@ -134,7 +178,7 @@
         </div>
 
         <!-- Usage Note -->
-        <div v-if="showPlatformNote" class="flex items-start gap-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800">
+        <div v-if="showPlatformNote && showManualConfig" class="flex items-start gap-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800">
           <Icon name="infoCircle" size="md" class="text-blue-500 flex-shrink-0 mt-0.5" />
           <p class="text-sm text-blue-700 dark:text-blue-300">
             {{ platformNote }}
@@ -204,6 +248,7 @@ const { copyToClipboard: clipboardCopy } = useClipboard()
 const copiedIndex = ref<number | null>(null)
 const activeTab = ref<string>('unix')
 const activeClientTab = ref<string>('claude')
+const activeSetupTab = ref<'manual' | 'script'>('manual')
 
 // Reset tabs when platform changes
 const defaultClientTab = computed(() => {
@@ -227,6 +272,7 @@ watch(() => props.platform, () => {
 // Reset shell tab when client changes
 watch(activeClientTab, () => {
   activeTab.value = 'unix'
+  activeSetupTab.value = 'manual'
 })
 
 // Icon components
@@ -477,6 +523,15 @@ const currentSetupScript = computed((): SetupScriptConfig | null => {
 })
 
 const canDownloadSetupScript = computed(() => currentSetupScript.value !== null)
+const showSetupScriptPanel = computed(() => canDownloadSetupScript.value && activeSetupTab.value === 'script')
+const showManualConfig = computed(() => !canDownloadSetupScript.value || activeSetupTab.value === 'manual')
+const currentSetupUsageCommand = computed(() => activeTab.value === 'windows'
+  ? 'powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\\Downloads\\sub2api-codex-setup.ps1"'
+  : 'chmod +x ~/Downloads/sub2api-codex-setup.sh\n~/Downloads/sub2api-codex-setup.sh')
+
+watch(canDownloadSetupScript, (available) => {
+  if (!available) activeSetupTab.value = 'manual'
+})
 
 function shellHeredoc(filename: string, content: string, marker: string): string {
   return `# Existing ${filename} is backed up as ${filename}.sub2api.bak.<timestamp>

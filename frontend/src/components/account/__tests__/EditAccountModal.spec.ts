@@ -388,18 +388,25 @@ describe('EditAccountModal', () => {
     const embeddingsCheckbox = wrapper.get<HTMLInputElement>(
       '[data-testid="openai-endpoint-capability-embeddings"]'
     )
+    const responsesCheckbox = wrapper.get<HTMLInputElement>(
+      '[data-testid="openai-endpoint-capability-responses"]'
+    )
 
     expect(chatCheckbox.element.checked).toBe(true)
+    expect(responsesCheckbox.element.checked).toBe(true)
     expect(embeddingsCheckbox.element.checked).toBe(true)
 
     await embeddingsCheckbox.setValue(false)
+    await responsesCheckbox.setValue(false)
 
     expect(chatCheckbox.element.checked).toBe(true)
+    expect(responsesCheckbox.element.checked).toBe(false)
     expect(embeddingsCheckbox.element.checked).toBe(false)
 
     await chatCheckbox.setValue(false)
 
     expect(chatCheckbox.element.checked).toBe(true)
+    expect(responsesCheckbox.element.checked).toBe(false)
     expect(embeddingsCheckbox.element.checked).toBe(false)
 
     await wrapper.get('form#edit-account-form').trigger('submit.prevent')

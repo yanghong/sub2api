@@ -768,6 +768,14 @@ export default {
       setupScriptTitle: '一键配置脚本',
       setupScriptWarning: '脚本包含当前 API 密钥，并会备份后写入本机 Codex 配置。请勿转发给他人。',
       downloadSetupScript: '下载配置脚本',
+      setupScriptUsageTitle: '脚本用法',
+      setupScriptUsageDownload: '点击下载配置脚本。',
+      setupScriptUsageRun: '打开终端或 PowerShell，运行下面的命令。',
+      setupScriptUsageRestart: '运行完成后，重新打开 Codex CLI。',
+      setupTabs: {
+        manual: '教程',
+        script: '一键配置'
+      },
       noGroupTitle: '请先分配分组',
       noGroupDescription:
         '此 API 密钥尚未分配分组，请先在密钥列表中点击分组列进行分配，然后才能查看使用配置。',
@@ -3595,7 +3603,7 @@ export default {
         responsesModeTextDisabledHint: '未启用 Responses / Chat Completions 端点时，此设置不适用。',
         endpointCapabilities: '端点能力',
         endpointCapabilitiesDesc:
-          '用于调度筛选。文本端点会跟随上方 Responses API 支持显示为 Responses、Chat Completions 或自动模式；Embeddings 独立控制 /v1/embeddings。',
+          '用于调度筛选。Chat Completions 控制 /v1/chat/completions，Responses 控制 MCP 审批等原生 /v1/responses 能力，Embeddings 控制 /v1/embeddings。',
         capabilityResponses: 'Responses',
         capabilityTextAuto: 'Responses / Chat Completions（自动）',
         capabilityResponsesAuto: 'Responses（自动探测）',

@@ -270,6 +270,71 @@ func TestForwardResponses_ForceChatCompletionsRejectsNativeResponsesToolChoice(t
 	require.Contains(t, gjson.Get(rec.Body.String(), "error.message").String(), `Responses tool_choice "web_search" requires an upstream that supports /v1/responses`)
 }
 
+func TestForwardResponses_ForceChatCompletionsRejectsMCPApprovalResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"codex-auto-review","previous_response_id":"resp_review","input":[{"type":"mcp_approval_response","approval_request_id":"apr_123","approve":true}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"chatcmpl_should_not_send","object":"chat.completion","choices":[]}`)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+
+	result, err := svc.Forward(context.Background(), c, forceChatResponsesFallbackAccount(), body)
+	require.Error(t, err)
+	require.Nil(t, result)
+	require.Nil(t, upstream.lastReq)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Equal(t, "invalid_request_error", gjson.Get(rec.Body.String(), "error.type").String())
+	require.Contains(t, gjson.Get(rec.Body.String(), "error.message").String(), `Responses input item "mcp_approval_response" requires an upstream that supports /v1/responses`)
+}
+
+func TestForwardResponses_AutoSupportedAccountPreservesMCPApprovalResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"codex-auto-review","previous_response_id":"resp_review","input":[{"type":"mcp_approval_response","approval_request_id":"apr_123","approve":true}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_mcp_approval"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"resp_review_done","object":"response","model":"codex-auto-review","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}],"status":"completed"}],"usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}`,
+		)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+	account := rawChatCompletionsTestAccount()
+	account.Extra = map[string]any{
+		openai_compat.ExtraKeyResponsesMode:      string(openai_compat.ResponsesSupportModeAuto),
+		openai_compat.ExtraKeyResponsesSupported: true,
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "http://upstream.example/v1/responses", upstream.lastReq.URL.String())
+	require.Equal(t, "resp_review", gjson.GetBytes(upstream.lastBody, "previous_response_id").String())
+	require.Equal(t, "mcp_approval_response", gjson.GetBytes(upstream.lastBody, "input.0.type").String())
+	require.Equal(t, "apr_123", gjson.GetBytes(upstream.lastBody, "input.0.approval_request_id").String())
+	require.True(t, gjson.GetBytes(upstream.lastBody, "input.0.approve").Bool())
+	require.Equal(t, "ok", gjson.Get(rec.Body.String(), "output.0.content.0.text").String())
+}
+
 func forceChatResponsesFallbackAccount() *Account {
 	account := rawChatCompletionsTestAccount()
 	account.Extra = map[string]any{

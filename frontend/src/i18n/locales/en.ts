@@ -770,6 +770,14 @@ export default {
       setupScriptTitle: 'One-click setup script',
       setupScriptWarning: 'The script contains this API key and writes local Codex config after backing up existing files. Do not share it with others.',
       downloadSetupScript: 'Download setup script',
+      setupScriptUsageTitle: 'Script usage',
+      setupScriptUsageDownload: 'Download the setup script.',
+      setupScriptUsageRun: 'Open Terminal or PowerShell, then run the command below.',
+      setupScriptUsageRestart: 'Restart Codex CLI after the script finishes.',
+      setupTabs: {
+        manual: 'Tutorial',
+        script: 'One-click setup',
+      },
       noGroupTitle: 'Please assign a group first',
       noGroupDescription: 'This API key has not been assigned to a group. Please click the group column in the key list to assign one before viewing the configuration.',
       openai: {
@@ -3439,7 +3447,7 @@ export default {
           'Not applicable when the Responses / Chat Completions endpoint is not enabled.',
         endpointCapabilities: 'Endpoint capabilities',
         endpointCapabilitiesDesc:
-          'Used by account routing. The text endpoint follows the Responses API support setting above and is shown as Responses, Chat Completions, or auto mode; Embeddings independently controls /v1/embeddings.',
+          'Used by account routing. Chat Completions controls /v1/chat/completions, Responses controls native /v1/responses features such as MCP approvals, and Embeddings controls /v1/embeddings.',
         capabilityResponses: 'Responses',
         capabilityTextAuto: 'Responses / Chat Completions (Auto)',
         capabilityResponsesAuto: 'Responses (auto probe)',
