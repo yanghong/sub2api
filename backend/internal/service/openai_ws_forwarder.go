@@ -2237,6 +2237,19 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 		imageCounter.AddSSEData(message)
 
+		if eventType == "response.failed" {
+			if hit, code, msg := detectOpenAICyberPolicy(message); hit {
+				MarkOpsCyberPolicy(c, CyberPolicyMark{
+					Code:           code,
+					Message:        msg,
+					Body:           truncateString(string(message), 4096),
+					UpstreamStatus: http.StatusOK,
+					UpstreamInTok:  usage.InputTokens,
+					UpstreamOutTok: usage.OutputTokens,
+				})
+			}
+		}
+
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
 			s.persistOpenAIWSRateLimitSignal(ctx, account, lease.HandshakeHeaders(), message, errCodeRaw, errTypeRaw, errMsgRaw)
@@ -2509,6 +2522,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		wsPath = normalizeOpenAIWSLogValue(parsedURL.Path)
 	}
 	debugEnabled := isOpenAIWSModeDebugEnabled()
+	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 
 	type openAIWSClientPayload struct {
 		payloadRaw         []byte
@@ -2618,6 +2632,34 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			normalized = next
 		}
+		apiKey := getAPIKeyFromContext(c)
+		imageGenerationAllowed := GroupAllowsImageGeneration(apiKeyGroup(apiKey))
+		codexBridgeEnabled := isCodexCLI && imageGenerationAllowed && s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
+		if codexBridgeEnabled {
+			payloadMap := make(map[string]any)
+			if err := json.Unmarshal(normalized, &payloadMap); err != nil {
+				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", err)
+			}
+			bridgeModified := false
+			if ensureOpenAIResponsesImageGenerationTool(payloadMap) {
+				bridgeModified = true
+				logOpenAIWSModeInfo("ingress_ws_codex_image_tool_injected account_id=%d", account.ID)
+			}
+			if normalizeOpenAIResponsesImageGenerationTools(payloadMap) {
+				bridgeModified = true
+			}
+			if applyCodexImageGenerationBridgeInstructions(payloadMap) {
+				bridgeModified = true
+				logOpenAIWSModeInfo("ingress_ws_codex_image_bridge_instructions_added account_id=%d", account.ID)
+			}
+			if bridgeModified {
+				rebuilt, marshalErr := json.Marshal(payloadMap)
+				if marshalErr != nil {
+					return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", marshalErr)
+				}
+				normalized = rebuilt
+			}
+		}
 		upstreamModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(originalModel))
 		if modelMissing || upstreamModel != originalModel {
 			next, setErr := applyPayloadMutation(normalized, "model", upstreamModel)
@@ -2627,7 +2669,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			normalized = next
 		}
 		imageIntent := IsImageGenerationIntent(openAIResponsesEndpoint, originalModel, normalized)
-		if imageIntent && !GroupAllowsImageGeneration(apiKeyGroup(getAPIKeyFromContext(c))) {
+		if imageIntent && !imageGenerationAllowed {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, ImageGenerationPermissionMessage(), nil)
 		}
 		imageBillingModel := ""
@@ -2874,7 +2916,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 	}
 
-	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 	wsHeaders, _ := s.buildOpenAIWSHeaders(c, account, token, wsDecision, isCodexCLI, turnState, strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)), firstPayload.promptCacheKey)
 	baseAcquireReq := openAIWSAcquireRequest{
 		Account: account,
@@ -3182,6 +3223,19 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			imageCounter.AddSSEData(upstreamMessage)
 
+			if eventType == "response.failed" {
+				if hit, code, msg := detectOpenAICyberPolicy(upstreamMessage); hit {
+					MarkOpsCyberPolicy(c, CyberPolicyMark{
+						Code:           code,
+						Message:        msg,
+						Body:           truncateString(string(upstreamMessage), 4096),
+						UpstreamStatus: http.StatusOK,
+						UpstreamInTok:  usage.InputTokens,
+						UpstreamOutTok: usage.OutputTokens,
+					})
+				}
+			}
+
 			if !clientDisconnected {
 				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
@@ -3248,7 +3302,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					Model:           originalModel,
 					UpstreamModel:   mappedModel,
 					ServiceTier:     extractOpenAIServiceTierFromBody(payload),
-					ReasoningEffort: extractOpenAIReasoningEffortFromBody(payload, originalModel),
+					ReasoningEffort: ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(payload, originalModel), payload, mappedModel),
 					Stream:          reqStream,
 					OpenAIWSMode:    true,
 					ResponseHeaders: lease.HandshakeHeaders(),
