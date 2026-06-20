@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
@@ -15,6 +15,19 @@ vi.mock('@/composables/useClipboard', () => ({
 }))
 
 import UseKeyModal from '../UseKeyModal.vue'
+
+function readBlobAsText(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error)
+    reader.readAsText(blob)
+  })
+}
+
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('UseKeyModal', () => {
   it('renders GPT-5.5 and goals feature in OpenAI Codex config', () => {
@@ -121,5 +134,74 @@ describe('UseKeyModal', () => {
     expect(codeBlock.exists()).toBe(true)
     expect(codeBlock.text()).toContain('"name": "GPT-5.4 Mini"')
     expect(codeBlock.text()).not.toContain('"name": "GPT-5.4 Nano"')
+  })
+
+  it('downloads a macOS/Linux setup script for OpenAI Codex config', async () => {
+    const createObjectURL = vi.fn(() => 'blob:sub2api-codex-setup')
+    const revokeObjectURL = vi.fn()
+    Object.defineProperty(window.URL, 'createObjectURL', {
+      value: createObjectURL,
+      configurable: true
+    })
+    Object.defineProperty(window.URL, 'revokeObjectURL', {
+      value: revokeObjectURL,
+      configurable: true
+    })
+
+    const originalCreateElement = document.createElement.bind(document)
+    const click = vi.fn()
+    let downloadAnchor: HTMLAnchorElement | null = null
+    vi.spyOn(document, 'createElement').mockImplementation((tagName: string, options?: ElementCreationOptions) => {
+      const element = originalCreateElement(tagName, options)
+      if (tagName === 'a') {
+        downloadAnchor = element as HTMLAnchorElement
+        Object.defineProperty(element, 'click', {
+          value: click,
+          configurable: true
+        })
+      }
+      return element
+    })
+
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'openai'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const downloadButton = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.downloadSetupScript')
+    )
+
+    expect(downloadButton).toBeDefined()
+    await downloadButton!.trigger('click')
+
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    expect(click).toHaveBeenCalledTimes(1)
+    expect(downloadAnchor?.download).toBe('sub2api-codex-setup.sh')
+
+    const blob = createObjectURL.mock.calls[0][0] as Blob
+    const script = await readBlobAsText(blob)
+    expect(script).toContain('#!/usr/bin/env bash')
+    expect(script).toContain('mkdir -p "$HOME/.codex"')
+    expect(script).toContain('config.toml.sub2api.bak')
+    expect(script).toContain('auth.json.sub2api.bak')
+    expect(script).toContain('base_url = "https://example.com/v1"')
+    expect(script).toContain('"OPENAI_API_KEY": "sk-test"')
+    expect(script).toContain('chmod 600 "$CODEX_DIR/auth.json"')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:sub2api-codex-setup')
   })
 })

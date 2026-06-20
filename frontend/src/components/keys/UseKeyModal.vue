@@ -72,6 +72,29 @@
           </nav>
         </div>
 
+        <!-- One-click setup script -->
+        <div
+          v-if="canDownloadSetupScript"
+          class="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <div class="min-w-0">
+            <p class="text-sm font-medium text-amber-900 dark:text-amber-100">
+              {{ t('keys.useKeyModal.setupScriptTitle') }}
+            </p>
+            <p class="mt-1 text-sm text-amber-700 dark:text-amber-300">
+              {{ t('keys.useKeyModal.setupScriptWarning') }}
+            </p>
+          </div>
+          <button
+            type="button"
+            class="btn btn-primary shrink-0 inline-flex items-center gap-2"
+            @click="downloadSetupScript"
+          >
+            <Icon name="download" size="sm" />
+            {{ t('keys.useKeyModal.downloadSetupScript') }}
+          </button>
+        </div>
+
         <!-- Code Blocks (Stacked for multi-file platforms) -->
         <div class="space-y-4">
           <div
@@ -164,6 +187,12 @@ interface FileConfig {
   content: string
   hint?: string  // Optional hint message for this file
   highlighted?: string
+}
+
+interface SetupScriptConfig {
+  filename: string
+  mimeType: string
+  content: string
 }
 
 const props = defineProps<Props>()
@@ -432,6 +461,113 @@ const currentFiles = computed((): FileConfig[] => {
       return generateAnthropicFiles(baseUrl, apiKey)
   }
 })
+
+const currentSetupScript = computed((): SetupScriptConfig | null => {
+  if (props.platform !== 'openai') return null
+  if (activeClientTab.value !== 'codex' && activeClientTab.value !== 'codex-ws') return null
+
+  const isWs = activeClientTab.value === 'codex-ws'
+  const files = isWs
+    ? generateOpenAIWsFiles(props.baseUrl, props.apiKey)
+    : generateOpenAIFiles(props.baseUrl, props.apiKey)
+
+  return activeTab.value === 'windows'
+    ? generateWindowsCodexSetupScript(files)
+    : generateUnixCodexSetupScript(files)
+})
+
+const canDownloadSetupScript = computed(() => currentSetupScript.value !== null)
+
+function shellHeredoc(filename: string, content: string, marker: string): string {
+  return `# Existing ${filename} is backed up as ${filename}.sub2api.bak.<timestamp>
+backup_file "$CODEX_DIR/${filename}"
+cat > "$CODEX_DIR/${filename}" <<'${marker}'
+${content}
+${marker}`
+}
+
+function powershellHereString(filename: string, content: string, variableName: string): string {
+  return `# Existing ${filename} is backed up as ${filename}.sub2api.bak.<timestamp>
+$${variableName} = @'
+${content}
+'@
+Backup-File (Join-Path $CodexDir "${filename}")
+Set-Content -Path (Join-Path $CodexDir "${filename}") -Value $${variableName} -NoNewline -Encoding UTF8`
+}
+
+function generateUnixCodexSetupScript(files: FileConfig[]): SetupScriptConfig {
+  const configFile = files.find((file) => file.path.endsWith('/config.toml'))
+  const authFile = files.find((file) => file.path.endsWith('/auth.json'))
+
+  return {
+    filename: 'sub2api-codex-setup.sh',
+    mimeType: 'text/x-shellscript;charset=utf-8',
+    content: `#!/usr/bin/env bash
+set -euo pipefail
+
+CODEX_DIR="$HOME/.codex"
+mkdir -p "$HOME/.codex"
+
+backup_file() {
+  local file="$1"
+  if [ -f "$file" ]; then
+    cp "$file" "$file.sub2api.bak.$(date +%Y%m%d%H%M%S)"
+  fi
+}
+
+${shellHeredoc('config.toml', configFile?.content || '', 'SUB2API_CONFIG_TOML')}
+
+${shellHeredoc('auth.json', authFile?.content || '', 'SUB2API_AUTH_JSON')}
+
+chmod 600 "$CODEX_DIR/auth.json"
+echo "Sub2API Codex configuration has been written to $CODEX_DIR"
+`
+  }
+}
+
+function generateWindowsCodexSetupScript(files: FileConfig[]): SetupScriptConfig {
+  const configFile = files.find((file) => file.path.endsWith('\\config.toml'))
+  const authFile = files.find((file) => file.path.endsWith('\\auth.json'))
+
+  return {
+    filename: 'sub2api-codex-setup.ps1',
+    mimeType: 'text/plain;charset=utf-8',
+    content: `$ErrorActionPreference = "Stop"
+
+$CodexDir = Join-Path $env:USERPROFILE ".codex"
+New-Item -ItemType Directory -Force -Path $CodexDir | Out-Null
+
+function Backup-File {
+  param([string]$Path)
+  if (Test-Path $Path) {
+    $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+    Copy-Item -Path $Path -Destination "$Path.sub2api.bak.$timestamp" -Force
+  }
+}
+
+${powershellHereString('config.toml', configFile?.content || '', 'ConfigToml')}
+
+${powershellHereString('auth.json', authFile?.content || '', 'AuthJson')}
+
+Write-Host "Sub2API Codex configuration has been written to $CodexDir"
+`
+  }
+}
+
+function downloadSetupScript() {
+  const script = currentSetupScript.value
+  if (!script) return
+
+  const blob = new Blob([script.content], { type: script.mimeType })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = script.filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
 
 function generateAnthropicFiles(baseUrl: string, apiKey: string): FileConfig[] {
   let path: string

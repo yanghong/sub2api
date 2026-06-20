@@ -738,6 +738,12 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 	}
 	if len(results) == 0 {
 		if upstreamErr := extractOpenAIImagesUpstreamError(body); upstreamErr != nil {
+			if s.shouldFailoverOpenAIUpstreamResponse(upstreamErr.clientStatusCode(), upstreamErr.clientMessage(), body) {
+				return OpenAIUsage{}, 0, nil, &UpstreamFailoverError{
+					StatusCode:   upstreamErr.clientStatusCode(),
+					ResponseBody: body,
+				}
+			}
 			setOpsUpstreamError(c, upstreamErr.clientStatusCode(), upstreamErr.clientMessage(), "")
 			writeOpenAIImagesUpstreamErrorResponse(c, upstreamErr)
 			return OpenAIUsage{}, 0, nil, upstreamErr
@@ -1229,6 +1235,32 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	} else {
 		usage, imageCount, imageOutputSizes, err = s.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, parsed.ResponseFormat, requestModel)
 		if err != nil {
+			if failoverErr, ok := err.(*UpstreamFailoverError); ok {
+				upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(failoverErr.ResponseBody))
+				upstreamRequestID := resp.Header.Get("x-request-id")
+				if imageErr := extractOpenAIImagesUpstreamError(failoverErr.ResponseBody); imageErr != nil {
+					if strings.TrimSpace(imageErr.Message) != "" {
+						upstreamMsg = imageErr.Message
+					}
+					if strings.TrimSpace(imageErr.UpstreamRequestID) != "" {
+						upstreamRequestID = imageErr.UpstreamRequestID
+					}
+				}
+				upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: failoverErr.StatusCode,
+					UpstreamRequestID:  upstreamRequestID,
+					UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
+					Kind:               "failover",
+					Message:            upstreamMsg,
+				})
+				if s.rateLimitService != nil {
+					s.rateLimitService.HandleUpstreamError(upstreamCtx, account, failoverErr.StatusCode, resp.Header, failoverErr.ResponseBody)
+				}
+			}
 			return nil, err
 		}
 	}

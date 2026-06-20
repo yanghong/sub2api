@@ -739,6 +739,9 @@ export default {
       copy: 'Copy',
       copied: 'Copied',
       note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
+      setupScriptTitle: 'One-click setup script',
+      setupScriptWarning: 'The script contains this API key and writes local Codex config after backing up existing files. Do not share it with others.',
+      downloadSetupScript: 'Download setup script',
       noGroupTitle: 'Please assign a group first',
       noGroupDescription: 'This API key has not been assigned to a group. Please click the group column in the key list to assign one before viewing the configuration.',
       openai: {
