@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -70,6 +71,17 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 			},
 		})
 		return nil, fmt.Errorf("native responses tool_choice %q cannot be forwarded via chat completions", toolChoiceType)
+	}
+	if itemType, ok := firstResponsesInputItemTypeRequiringNativeResponses(body); ok {
+		msg := fmt.Sprintf("Responses input item %q requires an upstream that supports /v1/responses", itemType)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": gin.H{
+				"type":    "invalid_request_error",
+				"message": msg,
+				"param":   "input",
+			},
+		})
+		return nil, fmt.Errorf("native responses input item %q cannot be forwarded via chat completions", itemType)
 	}
 
 	clientStream := responsesReq.Stream
@@ -211,6 +223,55 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		return s.streamChatCompletionsAsResponses(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
 	return s.bufferChatCompletionsAsResponses(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+}
+
+func ResponsesRequestRequiresNativeResponses(body []byte) bool {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return false
+	}
+	var responsesReq apicompat.ResponsesRequest
+	if err := json.Unmarshal(body, &responsesReq); err == nil {
+		if _, ok := firstResponsesToolTypeRequiringNativeResponses(responsesReq.Tools); ok {
+			return true
+		}
+		if _, ok := responsesToolChoiceTypeRequiringNativeResponses(responsesReq.ToolChoice); ok {
+			return true
+		}
+	}
+	_, ok := firstResponsesInputItemTypeRequiringNativeResponses(body)
+	return ok
+}
+
+func firstResponsesInputItemTypeRequiringNativeResponses(body []byte) (string, bool) {
+	input := gjson.GetBytes(body, "input")
+	if !input.Exists() || !input.IsArray() {
+		return "", false
+	}
+	var itemType string
+	input.ForEach(func(_, item gjson.Result) bool {
+		itemType = strings.TrimSpace(item.Get("type").String())
+		return !responsesInputItemTypeRequiresNativeResponses(itemType)
+	})
+	if itemType == "" || !responsesInputItemTypeRequiresNativeResponses(itemType) {
+		return "", false
+	}
+	return itemType, true
+}
+
+func responsesInputItemTypeRequiresNativeResponses(itemType string) bool {
+	switch strings.TrimSpace(itemType) {
+	case "mcp_approval_response",
+		"mcp_tool_call_output",
+		"code_interpreter_call_output",
+		"computer_call_output",
+		"file_search_call_output",
+		"function_call_output",
+		"custom_tool_call_output",
+		"web_search_call_output":
+		return true
+	default:
+		return false
+	}
 }
 
 func firstResponsesToolTypeRequiringNativeResponses(tools []apicompat.ResponsesTool) (string, bool) {
