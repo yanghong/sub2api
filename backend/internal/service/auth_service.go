@@ -133,6 +133,29 @@ func (s *AuthService) Register(ctx context.Context, email, password string) (str
 	return s.RegisterWithVerification(ctx, email, password, "", "", "", "")
 }
 
+func (s *AuthService) validateSignupInvitation(ctx context.Context, invitationCode string, missingErr error) (*RedeemCode, error) {
+	invitationCode = strings.TrimSpace(invitationCode)
+	if invitationCode == "" {
+		if missingErr != nil {
+			return nil, missingErr
+		}
+		return nil, ErrInvitationCodeRequired
+	}
+	if s == nil || s.redeemRepo == nil {
+		return nil, ErrServiceUnavailable
+	}
+	redeemCode, err := s.redeemRepo.GetByCode(ctx, invitationCode)
+	if err != nil {
+		logger.LegacyPrintf("service.auth", "[Auth] Invalid invitation code: %s, error: %v", invitationCode, err)
+		return nil, ErrInvitationCodeInvalid
+	}
+	if redeemCode.Type != RedeemTypeInvitation || !redeemCode.CanUse() {
+		logger.LegacyPrintf("service.auth", "[Auth] Invitation code invalid: type=%s, status=%s", redeemCode.Type, redeemCode.Status)
+		return nil, ErrInvitationCodeInvalid
+	}
+	return redeemCode, nil
+}
+
 // RegisterWithVerification 用户注册（支持邮件验证、优惠码、邀请码和邀请返利码），返回token和用户。
 func (s *AuthService) RegisterWithVerification(ctx context.Context, email, password, verifyCode, promoCode, invitationCode, affiliateCode string) (string, *User, error) {
 	// 检查是否开放注册（默认关闭：settingService 未配置时不允许注册）
@@ -148,24 +171,9 @@ func (s *AuthService) RegisterWithVerification(ctx context.Context, email, passw
 		return "", nil, err
 	}
 
-	// 检查是否需要邀请码
-	var invitationRedeemCode *RedeemCode
-	if s.settingService != nil && s.settingService.IsInvitationCodeEnabled(ctx) {
-		if invitationCode == "" {
-			return "", nil, ErrInvitationCodeRequired
-		}
-		// 验证邀请码
-		redeemCode, err := s.redeemRepo.GetByCode(ctx, invitationCode)
-		if err != nil {
-			logger.LegacyPrintf("service.auth", "[Auth] Invalid invitation code: %s, error: %v", invitationCode, err)
-			return "", nil, ErrInvitationCodeInvalid
-		}
-		// 检查类型和状态
-		if redeemCode.Type != RedeemTypeInvitation || !redeemCode.CanUse() {
-			logger.LegacyPrintf("service.auth", "[Auth] Invitation code invalid: type=%s, status=%s", redeemCode.Type, redeemCode.Status)
-			return "", nil, ErrInvitationCodeInvalid
-		}
-		invitationRedeemCode = redeemCode
+	invitationRedeemCode, err := s.validateSignupInvitation(ctx, invitationCode, ErrInvitationCodeRequired)
+	if err != nil {
+		return "", nil, err
 	}
 
 	// 检查是否需要邮件验证

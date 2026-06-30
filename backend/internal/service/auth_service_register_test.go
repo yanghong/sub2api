@@ -253,6 +253,25 @@ func newAuthService(repo *userRepoStub, settings map[string]string, emailCache E
 	)
 }
 
+func newAuthServiceWithRedeemRepo(repo *userRepoStub, settings map[string]string, emailCache EmailCache, quotaRepo UserPlatformQuotaRepository, redeemRepo RedeemCodeRepository) *AuthService {
+	svc := newAuthService(repo, settings, emailCache, quotaRepo)
+	svc.redeemRepo = redeemRepo
+	return svc
+}
+
+func testInvitationRepo(code string, id int64) *redeemCodeRepoStub {
+	return &redeemCodeRepoStub{
+		codesByCode: map[string]*RedeemCode{
+			code: {
+				ID:     id,
+				Code:   code,
+				Type:   RedeemTypeInvitation,
+				Status: StatusUnused,
+			},
+		},
+	}
+}
+
 func TestAuthService_Register_Disabled(t *testing.T) {
 	repo := &userRepoStub{}
 	service := newAuthService(repo, map[string]string{
@@ -275,13 +294,14 @@ func TestAuthService_Register_DisabledByDefault(t *testing.T) {
 func TestAuthService_Register_SnapshotsPlatformQuotaDefaults(t *testing.T) {
 	repo := &userRepoStub{nextID: 77}
 	quotaRepo := &userPlatformQuotaRepoStub{}
+	redeemRepo := testInvitationRepo("invite-quota", 1701)
 
-	service := newAuthService(repo, map[string]string{
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled:   "true",
 		SettingKeyDefaultPlatformQuotas: `{"openai": {"weekly": 12.34}}`,
-	}, nil, quotaRepo)
+	}, nil, quotaRepo, redeemRepo)
 
-	_, user, err := service.Register(context.Background(), "newuser@test.com", "password")
+	_, user, err := service.RegisterWithVerification(context.Background(), "newuser@test.com", "password", "", "", "invite-quota", "")
 	require.NoError(t, err)
 	require.NotNil(t, user)
 
@@ -317,26 +337,28 @@ func TestAuthService_Register_DoesNotSnapshotOnDisabled(t *testing.T) {
 
 func TestAuthService_Register_EmailVerifyEnabledButServiceNotConfigured(t *testing.T) {
 	repo := &userRepoStub{}
+	redeemRepo := testInvitationRepo("invite-email-service", 1702)
 	// 邮件验证开启但 emailCache 为 nil（emailService 未配置）
-	service := newAuthService(repo, map[string]string{
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled: "true",
 		SettingKeyEmailVerifyEnabled:  "true",
-	}, nil, nil)
+	}, nil, nil, redeemRepo)
 
 	// 应返回服务不可用错误，而不是允许绕过验证
-	_, _, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "any-code", "", "", "")
+	_, _, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "any-code", "", "invite-email-service", "")
 	require.ErrorIs(t, err, ErrServiceUnavailable)
 }
 
 func TestAuthService_Register_EmailVerifyRequired(t *testing.T) {
 	repo := &userRepoStub{}
 	cache := &emailCacheStub{} // 配置 emailService
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-email-required", 1703)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled: "true",
 		SettingKeyEmailVerifyEnabled:  "true",
-	}, cache, nil)
+	}, cache, nil, redeemRepo)
 
-	_, _, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "", "", "", "")
+	_, _, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "", "", "invite-email-required", "")
 	require.ErrorIs(t, err, ErrEmailVerifyRequired)
 }
 
@@ -345,33 +367,36 @@ func TestAuthService_Register_EmailVerifyInvalid(t *testing.T) {
 	cache := &emailCacheStub{
 		data: &VerificationCodeData{Code: "expected", Attempts: 0},
 	}
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-email-invalid", 1704)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled: "true",
 		SettingKeyEmailVerifyEnabled:  "true",
-	}, cache, nil)
+	}, cache, nil, redeemRepo)
 
-	_, _, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "wrong", "", "", "")
+	_, _, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "wrong", "", "invite-email-invalid", "")
 	require.ErrorIs(t, err, ErrInvalidVerifyCode)
 	require.ErrorContains(t, err, "verify code")
 }
 
 func TestAuthService_Register_EmailExists(t *testing.T) {
 	repo := &userRepoStub{exists: true}
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-email-exists", 1705)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled: "true",
-	}, nil, nil)
+	}, nil, nil, redeemRepo)
 
-	_, _, err := service.Register(context.Background(), "user@test.com", "password")
+	_, _, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "", "", "invite-email-exists", "")
 	require.ErrorIs(t, err, ErrEmailExists)
 }
 
 func TestAuthService_Register_CheckEmailError(t *testing.T) {
 	repo := &userRepoStub{existsErr: errors.New("db down")}
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-check-error", 1706)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled: "true",
-	}, nil, nil)
+	}, nil, nil, redeemRepo)
 
-	_, _, err := service.Register(context.Background(), "user@test.com", "password")
+	_, _, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "", "", "invite-check-error", "")
 	require.ErrorIs(t, err, ErrServiceUnavailable)
 }
 
@@ -404,12 +429,13 @@ func TestAuthService_Register_EmailSuffixNotAllowed(t *testing.T) {
 
 func TestAuthService_Register_EmailSuffixAllowed(t *testing.T) {
 	repo := &userRepoStub{nextID: 8}
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-suffix", 1707)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled:              "true",
 		SettingKeyRegistrationEmailSuffixWhitelist: `["example.com"]`,
-	}, nil, nil)
+	}, nil, nil, redeemRepo)
 
-	_, user, err := service.Register(context.Background(), "user@example.com", "password")
+	_, user, err := service.RegisterWithVerification(context.Background(), "user@example.com", "password", "", "", "invite-suffix", "")
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	require.Equal(t, int64(8), user.ID)
@@ -432,33 +458,36 @@ func TestAuthService_SendVerifyCode_EmailSuffixNotAllowed(t *testing.T) {
 
 func TestAuthService_Register_CreateError(t *testing.T) {
 	repo := &userRepoStub{createErr: errors.New("create failed")}
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-create-error", 1708)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled: "true",
-	}, nil, nil)
+	}, nil, nil, redeemRepo)
 
-	_, _, err := service.Register(context.Background(), "user@test.com", "password")
+	_, _, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "", "", "invite-create-error", "")
 	require.ErrorIs(t, err, ErrServiceUnavailable)
 }
 
 func TestAuthService_Register_CreateEmailExistsRace(t *testing.T) {
 	// 模拟竞态条件：ExistsByEmail 返回 false，但 Create 时因唯一约束失败
 	repo := &userRepoStub{createErr: ErrEmailExists}
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-race", 1709)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled: "true",
-	}, nil, nil)
+	}, nil, nil, redeemRepo)
 
-	_, _, err := service.Register(context.Background(), "user@test.com", "password")
+	_, _, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "", "", "invite-race", "")
 	require.ErrorIs(t, err, ErrEmailExists)
 }
 
 func TestAuthService_Register_Success(t *testing.T) {
 	repo := &userRepoStub{nextID: 5}
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-ok", 1710)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled:                 "true",
 		SettingKeyAuthSourceDefaultEmailGrantOnSignup: "false",
-	}, nil, nil)
+	}, nil, nil, redeemRepo)
 
-	token, user, err := service.Register(context.Background(), "user@test.com", "password")
+	token, user, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "", "", "invite-ok", "")
 	require.NoError(t, err)
 	require.NotEmpty(t, token)
 	require.NotNil(t, user)
@@ -470,6 +499,58 @@ func TestAuthService_Register_Success(t *testing.T) {
 	require.Equal(t, 2, user.Concurrency)
 	require.Len(t, repo.created, 1)
 	require.True(t, user.CheckPassword("password"))
+}
+
+func TestAuthService_Register_RequiresInvitationCodeEvenWhenSettingDisabled(t *testing.T) {
+	repo := &userRepoStub{}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled:   "true",
+		SettingKeyInvitationCodeEnabled: "false",
+	}, nil, nil)
+
+	_, _, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "", "", "", "")
+	require.ErrorIs(t, err, ErrInvitationCodeRequired)
+	require.Empty(t, repo.created)
+}
+
+func TestAuthService_Register_ConsumesValidInvitationCodeWhenSettingDisabled(t *testing.T) {
+	repo := &userRepoStub{nextID: 42}
+	redeemRepo := testInvitationRepo("invite-42", 1001)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
+		SettingKeyRegistrationEnabled:   "true",
+		SettingKeyInvitationCodeEnabled: "false",
+	}, nil, nil, redeemRepo)
+
+	token, user, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "", "", "invite-42", "")
+	require.NoError(t, err)
+	require.NotEmpty(t, token)
+	require.NotNil(t, user)
+	require.Equal(t, int64(42), user.ID)
+	require.Len(t, redeemRepo.useCalls, 1)
+	require.Equal(t, int64(1001), redeemRepo.useCalls[0].id)
+	require.Equal(t, int64(42), redeemRepo.useCalls[0].userID)
+}
+
+func TestAuthService_Register_RejectsUsedInvitationCode(t *testing.T) {
+	repo := &userRepoStub{}
+	redeemRepo := &redeemCodeRepoStub{
+		codesByCode: map[string]*RedeemCode{
+			"used": {
+				ID:     1002,
+				Code:   "used",
+				Type:   RedeemTypeInvitation,
+				Status: StatusUsed,
+			},
+		},
+	}
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+	}, nil, nil, redeemRepo)
+
+	_, _, err := service.RegisterWithVerification(context.Background(), "user@test.com", "password", "", "", "used", "")
+	require.ErrorIs(t, err, ErrInvitationCodeInvalid)
+	require.Empty(t, repo.created)
+	require.Empty(t, redeemRepo.useCalls)
 }
 
 func TestAuthService_ValidateToken_ExpiredReturnsClaimsWithError(t *testing.T) {
@@ -601,14 +682,15 @@ func TestAuthService_GenerateToken_UsesMinutesWhenConfigured(t *testing.T) {
 func TestAuthService_Register_AssignsDefaultSubscriptions(t *testing.T) {
 	repo := &userRepoStub{nextID: 42}
 	assigner := &defaultSubscriptionAssignerStub{}
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-default-sub", 1711)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled:                 "true",
 		SettingKeyDefaultSubscriptions:                `[{"group_id":11,"validity_days":30},{"group_id":12,"validity_days":7}]`,
 		SettingKeyAuthSourceDefaultEmailGrantOnSignup: "false",
-	}, nil, nil)
+	}, nil, nil, redeemRepo)
 	service.defaultSubAssigner = assigner
 
-	_, user, err := service.Register(context.Background(), "default-sub@test.com", "password")
+	_, user, err := service.RegisterWithVerification(context.Background(), "default-sub@test.com", "password", "", "", "invite-default-sub", "")
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	require.Len(t, assigner.calls, 2)
@@ -622,17 +704,18 @@ func TestAuthService_Register_AssignsDefaultSubscriptions(t *testing.T) {
 func TestAuthService_Register_UsesEmailAuthSourceDefaultsWhenGrantEnabled(t *testing.T) {
 	repo := &userRepoStub{nextID: 52}
 	assigner := &defaultSubscriptionAssignerStub{}
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-email-defaults", 1712)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled:                 "true",
 		SettingKeyDefaultSubscriptions:                `[{"group_id":91,"validity_days":3}]`,
 		SettingKeyAuthSourceDefaultEmailBalance:       "12.5",
 		SettingKeyAuthSourceDefaultEmailConcurrency:   "7",
 		SettingKeyAuthSourceDefaultEmailSubscriptions: `[{"group_id":11,"validity_days":30}]`,
 		SettingKeyAuthSourceDefaultEmailGrantOnSignup: "true",
-	}, nil, nil)
+	}, nil, nil, redeemRepo)
 	service.defaultSubAssigner = assigner
 
-	_, user, err := service.Register(context.Background(), "email-defaults@test.com", "password")
+	_, user, err := service.RegisterWithVerification(context.Background(), "email-defaults@test.com", "password", "", "", "invite-email-defaults", "")
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	require.Equal(t, 12.5, user.Balance)
@@ -645,17 +728,18 @@ func TestAuthService_Register_UsesEmailAuthSourceDefaultsWhenGrantEnabled(t *tes
 func TestAuthService_Register_GrantOnSignupFalseFallsBackToGlobalDefaults(t *testing.T) {
 	repo := &userRepoStub{nextID: 53}
 	assigner := &defaultSubscriptionAssignerStub{}
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-global-defaults", 1713)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled:                 "true",
 		SettingKeyDefaultSubscriptions:                `[{"group_id":31,"validity_days":5}]`,
 		SettingKeyAuthSourceDefaultEmailBalance:       "99",
 		SettingKeyAuthSourceDefaultEmailConcurrency:   "88",
 		SettingKeyAuthSourceDefaultEmailSubscriptions: `[{"group_id":32,"validity_days":9}]`,
 		SettingKeyAuthSourceDefaultEmailGrantOnSignup: "false",
-	}, nil, nil)
+	}, nil, nil, redeemRepo)
 	service.defaultSubAssigner = assigner
 
-	_, user, err := service.Register(context.Background(), "email-global@test.com", "password")
+	_, user, err := service.RegisterWithVerification(context.Background(), "email-global@test.com", "password", "", "", "invite-global-defaults", "")
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	require.Equal(t, 3.5, user.Balance)
@@ -668,17 +752,18 @@ func TestAuthService_Register_GrantOnSignupFalseFallsBackToGlobalDefaults(t *tes
 func TestAuthService_Register_GrantOnSignupMergesSourceOverridesWithGlobalDefaults(t *testing.T) {
 	repo := &userRepoStub{nextID: 54}
 	assigner := &defaultSubscriptionAssignerStub{}
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-merged-defaults", 1714)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled:                 "true",
 		SettingKeyDefaultSubscriptions:                `[{"group_id":31,"validity_days":5}]`,
 		SettingKeyAuthSourceDefaultEmailBalance:       "9.5",
 		SettingKeyAuthSourceDefaultEmailConcurrency:   "5",
 		SettingKeyAuthSourceDefaultEmailSubscriptions: `[]`,
 		SettingKeyAuthSourceDefaultEmailGrantOnSignup: "true",
-	}, nil, nil)
+	}, nil, nil, redeemRepo)
 	service.defaultSubAssigner = assigner
 
-	_, user, err := service.Register(context.Background(), "email-merged@test.com", "password")
+	_, user, err := service.RegisterWithVerification(context.Background(), "email-merged@test.com", "password", "", "", "invite-merged-defaults", "")
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	require.Equal(t, 9.5, user.Balance)
