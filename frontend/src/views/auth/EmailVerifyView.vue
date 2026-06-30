@@ -239,11 +239,12 @@ const showResendTurnstile = ref<boolean>(false)
 
 const errors = ref({
   code: '',
-  turnstile: ''
+  turnstile: '',
+  invitation_code: ''
 })
 
 const validationToastMessage = computed(
-  () => errors.value.code || errors.value.turnstile || ''
+  () => errors.value.code || errors.value.turnstile || errors.value.invitation_code || ''
 )
 
 watch(validationToastMessage, (value, previousValue) => {
@@ -469,6 +470,7 @@ async function handleResendCode(): Promise<void> {
 
 function validateForm(): boolean {
   errors.value.code = ''
+  errors.value.invitation_code = ''
 
   if (!verifyCode.value.trim()) {
     errors.value.code = t('auth.codeRequired')
@@ -477,6 +479,11 @@ function validateForm(): boolean {
 
   if (!/^\d{6}$/.test(verifyCode.value.trim())) {
     errors.value.code = t('auth.invalidCode')
+    return false
+  }
+
+  if (!invitationCode.value.trim()) {
+    errors.value.invitation_code = t('auth.invitationCodeRequired')
     return false
   }
 
@@ -504,10 +511,8 @@ async function handleVerify(): Promise<void> {
         email: email.value,
         password: password.value,
         verify_code: verifyCode.value.trim(),
+        invitation_code: invitationCode.value.trim(),
         ...oauthAffiliatePayload(affCode.value || loadAffiliateReferralCode()),
-      }
-      if (invitationCode.value) {
-        payload.invitation_code = invitationCode.value
       }
       if (pendingAdoptionDecision.value?.adoptDisplayName !== undefined) {
         payload.adopt_display_name = pendingAdoptionDecision.value.adoptDisplayName
@@ -541,7 +546,7 @@ async function handleVerify(): Promise<void> {
         verify_code: verifyCode.value.trim(),
         turnstile_token: initialTurnstileToken.value || undefined,
         promo_code: promoCode.value || undefined,
-        invitation_code: invitationCode.value || undefined,
+        invitation_code: invitationCode.value.trim(),
         ...(affCode.value ? { aff_code: affCode.value } : {})
       })
     }

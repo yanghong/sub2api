@@ -87,8 +87,8 @@
           </p>
         </div>
 
-        <!-- Invitation Code Input (Required when enabled) -->
-        <div v-if="invitationCodeEnabled">
+        <!-- Invitation Code Input (Required) -->
+        <div>
           <label for="invitation_code" class="input-label">
             {{ t('auth.invitationCodeLabel') }}
           </label>
@@ -787,12 +787,10 @@ function validateForm(): boolean {
     isValid = false
   }
 
-  // Invitation code validation (required when enabled)
-  if (invitationCodeEnabled.value) {
-    if (!formData.invitation_code.trim()) {
-      errors.invitation_code = t('auth.invitationCodeRequired')
-      isValid = false
-    }
+  // Invitation code validation
+  if (!formData.invitation_code.trim()) {
+    errors.invitation_code = t('auth.invitationCodeRequired')
+    isValid = false
   }
 
   // Turnstile validation
@@ -829,27 +827,24 @@ async function handleRegister(): Promise<void> {
     }
   }
 
-  // Check invitation code validation status (if enabled and code provided)
-  if (invitationCodeEnabled.value) {
-    // If still validating, wait
-    if (invitationValidating.value) {
-      errorMessage.value = t('auth.invitationCodeValidating')
-      return
-    }
-    // If invitation code is invalid, block submission
-    if (invitationValidation.invalid) {
+  // Check invitation code validation status
+  if (invitationValidating.value) {
+    errorMessage.value = t('auth.invitationCodeValidating')
+    return
+  }
+  // If invitation code is invalid, block submission
+  if (invitationValidation.invalid) {
+    errorMessage.value = t('auth.invitationCodeInvalidCannotRegister')
+    return
+  }
+  // If invitation code is required but not validated yet
+  if (formData.invitation_code.trim() && !invitationValidation.valid) {
+    errorMessage.value = t('auth.invitationCodeValidating')
+    // Trigger validation
+    await validateInvitationCodeDebounced(formData.invitation_code.trim())
+    if (!invitationValidation.valid) {
       errorMessage.value = t('auth.invitationCodeInvalidCannotRegister')
       return
-    }
-    // If invitation code is required but not validated yet
-    if (formData.invitation_code.trim() && !invitationValidation.valid) {
-      errorMessage.value = t('auth.invitationCodeValidating')
-      // Trigger validation
-      await validateInvitationCodeDebounced(formData.invitation_code.trim())
-      if (!invitationValidation.valid) {
-        errorMessage.value = t('auth.invitationCodeInvalidCannotRegister')
-        return
-      }
     }
   }
 
@@ -871,7 +866,7 @@ async function handleRegister(): Promise<void> {
           password: formData.password,
           turnstile_token: turnstileToken.value,
           promo_code: formData.promo_code || undefined,
-          invitation_code: formData.invitation_code || undefined,
+          invitation_code: formData.invitation_code.trim(),
           ...(affCode ? { aff_code: affCode } : {})
         })
       )
@@ -887,7 +882,7 @@ async function handleRegister(): Promise<void> {
       password: formData.password,
       turnstile_token: turnstileEnabled.value ? turnstileToken.value : undefined,
       promo_code: formData.promo_code || undefined,
-      invitation_code: formData.invitation_code || undefined,
+      invitation_code: formData.invitation_code.trim(),
       ...(affCode ? { aff_code: affCode } : {})
     })
     clearAffiliateReferralCode()

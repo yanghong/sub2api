@@ -122,7 +122,7 @@ export interface RegisterRequest {
   verify_code?: string
   turnstile_token?: string
   promo_code?: string
-  invitation_code?: string
+  invitation_code: string
   aff_code?: string
 }
 
