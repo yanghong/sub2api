@@ -199,8 +199,32 @@ func TestRegisterOAuthEmailAccountRollsBackCreatedUserWhenTokenPairGenerationFai
 	require.Empty(t, redeemRepo.updateCalls)
 }
 
+func TestRegisterOAuthEmailAccountRequiresInvitationWhenSettingDisabled(t *testing.T) {
+	userRepo := &userRepoStub{nextID: 31}
+	emailCache := &emailCacheStub{data: &VerificationCodeData{Code: "123456"}}
+	authService := newOAuthEmailFlowAuthService(userRepo, &redeemCodeRepoStub{}, &refreshTokenCacheStub{}, map[string]string{
+		SettingKeyRegistrationEnabled:   "true",
+		SettingKeyInvitationCodeEnabled: "false",
+	}, emailCache, nil)
+
+	tokenPair, user, err := authService.RegisterOAuthEmailAccount(
+		context.Background(),
+		"user@example.com",
+		"secret-123",
+		"123456",
+		"",
+		"linuxdo",
+	)
+
+	require.Nil(t, tokenPair)
+	require.Nil(t, user)
+	require.ErrorIs(t, err, ErrInvitationCodeRequired)
+	require.Empty(t, userRepo.created)
+}
+
 func TestRegisterOAuthEmailAccountSetsNormalizedSignupSourceOnCreatedUser(t *testing.T) {
 	userRepo := &userRepoStub{nextID: 42}
+	redeemRepo := testInvitationRepo("INVITE-OIDC", 1801)
 	emailCache := &emailCacheStub{
 		data: &VerificationCodeData{
 			Code:      "246810",
@@ -211,7 +235,7 @@ func TestRegisterOAuthEmailAccountSetsNormalizedSignupSourceOnCreatedUser(t *tes
 	}
 	authService := newOAuthEmailFlowAuthService(
 		userRepo,
-		&redeemCodeRepoStub{},
+		redeemRepo,
 		&refreshTokenCacheStub{},
 		map[string]string{
 			SettingKeyRegistrationEnabled: "true",
@@ -226,7 +250,7 @@ func TestRegisterOAuthEmailAccountSetsNormalizedSignupSourceOnCreatedUser(t *tes
 		"fresh@example.com",
 		"secret-123",
 		"246810",
-		"",
+		"INVITE-OIDC",
 		" OIDC ",
 	)
 
@@ -261,6 +285,7 @@ func TestRegisterOAuthEmailAccountKeepsGitHubAndGoogleSignupSource(t *testing.T)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			userRepo := &userRepoStub{nextID: 43}
+			redeemRepo := testInvitationRepo("INVITE-"+tt.want, 1802)
 			emailCache := &emailCacheStub{
 				data: &VerificationCodeData{
 					Code:      "246810",
@@ -271,7 +296,7 @@ func TestRegisterOAuthEmailAccountKeepsGitHubAndGoogleSignupSource(t *testing.T)
 			}
 			authService := newOAuthEmailFlowAuthService(
 				userRepo,
-				&redeemCodeRepoStub{},
+				redeemRepo,
 				&refreshTokenCacheStub{},
 				map[string]string{
 					SettingKeyRegistrationEnabled: "true",
@@ -286,7 +311,7 @@ func TestRegisterOAuthEmailAccountKeepsGitHubAndGoogleSignupSource(t *testing.T)
 				tt.email,
 				"secret-123",
 				"246810",
-				"",
+				"INVITE-"+tt.want,
 				tt.signupSource,
 			)
 
@@ -301,6 +326,7 @@ func TestRegisterOAuthEmailAccountKeepsGitHubAndGoogleSignupSource(t *testing.T)
 
 func TestRegisterOAuthEmailAccountFallsBackUnknownSignupSourceToEmail(t *testing.T) {
 	userRepo := &userRepoStub{nextID: 43}
+	redeemRepo := testInvitationRepo("INVITE-FALLBACK", 1803)
 	emailCache := &emailCacheStub{
 		data: &VerificationCodeData{
 			Code:      "246810",
@@ -311,7 +337,7 @@ func TestRegisterOAuthEmailAccountFallsBackUnknownSignupSourceToEmail(t *testing
 	}
 	authService := newOAuthEmailFlowAuthService(
 		userRepo,
-		&redeemCodeRepoStub{},
+		redeemRepo,
 		&refreshTokenCacheStub{},
 		map[string]string{
 			SettingKeyRegistrationEnabled: "true",
@@ -326,7 +352,7 @@ func TestRegisterOAuthEmailAccountFallsBackUnknownSignupSourceToEmail(t *testing
 		"fallback@example.com",
 		"secret-123",
 		"246810",
-		"",
+		"INVITE-FALLBACK",
 		"unknown-provider",
 	)
 

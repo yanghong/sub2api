@@ -776,18 +776,19 @@ func TestAuthService_Register_GrantOnSignupMergesSourceOverridesWithGlobalDefaul
 func TestAuthService_LoginOrRegisterOAuthWithTokenPair_UsesLinuxDoAuthSourceDefaultsOnSignup(t *testing.T) {
 	repo := &userRepoStub{nextID: 61}
 	assigner := &defaultSubscriptionAssignerStub{}
-	service := newAuthService(repo, map[string]string{
+	redeemRepo := testInvitationRepo("invite-linuxdo", 1810)
+	service := newAuthServiceWithRedeemRepo(repo, map[string]string{
 		SettingKeyRegistrationEnabled:                   "true",
 		SettingKeyDefaultSubscriptions:                  `[{"group_id":81,"validity_days":1}]`,
 		SettingKeyAuthSourceDefaultLinuxDoBalance:       "21.75",
 		SettingKeyAuthSourceDefaultLinuxDoConcurrency:   "9",
 		SettingKeyAuthSourceDefaultLinuxDoSubscriptions: `[{"group_id":22,"validity_days":14}]`,
 		SettingKeyAuthSourceDefaultLinuxDoGrantOnSignup: "true",
-	}, nil, nil)
+	}, nil, nil, redeemRepo)
 	service.defaultSubAssigner = assigner
 	service.refreshTokenCache = &refreshTokenCacheStub{}
 
-	tokenPair, user, err := service.LoginOrRegisterOAuthWithTokenPair(context.Background(), "linuxdo-123@linuxdo-connect.invalid", "linuxdo_user", "", "", "linuxdo")
+	tokenPair, user, err := service.LoginOrRegisterOAuthWithTokenPair(context.Background(), "linuxdo-123@linuxdo-connect.invalid", "linuxdo_user", "invite-linuxdo", "", "linuxdo")
 	require.NoError(t, err)
 	require.NotNil(t, tokenPair)
 	require.NotNil(t, user)
