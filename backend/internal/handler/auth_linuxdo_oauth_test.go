@@ -242,19 +242,23 @@ func TestLinuxDoOAuthCallbackAllowsMissingVerifierWhenPKCEDisabled(t *testing.T)
 
 	require.Equal(t, http.StatusFound, recorder.Code)
 	location := recorder.Header().Get("Location")
-	require.Contains(t, location, "/auth/linuxdo/callback#")
-	require.Contains(t, location, "access_token=")
-	requireCookieCleared(t, recorder, oauthPendingSessionCookieName)
+	require.Equal(t, "/auth/linuxdo/callback", location)
+	require.NotContains(t, location, "access_token=")
+	require.NotNil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
 
-	identity, err := client.AuthIdentity.Query().
+	ctx := context.Background()
+	identityCount, err := client.AuthIdentity.Query().
 		Where(
 			authidentity.ProviderTypeEQ("linuxdo"),
 			authidentity.ProviderKeyEQ("linuxdo"),
 			authidentity.ProviderSubjectEQ("compat-subject"),
 		).
-		Only(context.Background())
+		Count(ctx)
 	require.NoError(t, err)
-	require.Positive(t, identity.UserID)
+	require.Zero(t, identityCount)
+	sessionCount, err := client.PendingAuthSession.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, sessionCount)
 }
 
 func TestLinuxDoOAuthBindStartAcceptsAccessTokenCookie(t *testing.T) {
@@ -777,36 +781,31 @@ func TestLinuxDoOAuthCallbackDirectlyLogsInNewUserWhenEmailVerificationDisabled(
 
 	require.Equal(t, http.StatusFound, recorder.Code)
 	location := recorder.Header().Get("Location")
-	require.Contains(t, location, "/auth/linuxdo/callback#")
-	require.Contains(t, location, "access_token=")
-	require.Contains(t, location, "refresh_token=")
-	fragmentValues := parseOAuthRedirectFragment(t, location)
-	require.Equal(t, "/dashboard", fragmentValues.Get("redirect"))
-	requireCookieCleared(t, recorder, oauthPendingSessionCookieName)
-	requireCookieCleared(t, recorder, oauthPendingBrowserCookieName)
+	require.Equal(t, "/auth/linuxdo/callback", location)
+	require.NotContains(t, location, "access_token=")
+	require.NotContains(t, location, "refresh_token=")
+	require.NotNil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
 
 	ctx := context.Background()
-	userEntity, err := client.User.Query().
+	userCount, err := client.User.Query().
 		Where(dbuser.EmailEQ("linuxdo-direct-123@linuxdo-connect.invalid")).
-		Only(ctx)
+		Count(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "linuxdo_direct", userEntity.Username)
-	require.Equal(t, "linuxdo", userEntity.SignupSource)
+	require.Zero(t, userCount)
 
-	identity, err := client.AuthIdentity.Query().
+	identityCount, err := client.AuthIdentity.Query().
 		Where(
 			authidentity.ProviderTypeEQ("linuxdo"),
 			authidentity.ProviderKeyEQ("linuxdo"),
 			authidentity.ProviderSubjectEQ("direct-123"),
 		).
-		Only(ctx)
+		Count(ctx)
 	require.NoError(t, err)
-	require.Equal(t, userEntity.ID, identity.UserID)
-	require.Equal(t, "https://cdn.example/direct.png", identity.Metadata["suggested_avatar_url"])
+	require.Zero(t, identityCount)
 
 	sessionCount, err := client.PendingAuthSession.Query().Count(ctx)
 	require.NoError(t, err)
-	require.Zero(t, sessionCount)
+	require.Equal(t, 1, sessionCount)
 }
 
 func TestLinuxDoOAuthCallbackCreatesBindPendingSessionForCurrentUser(t *testing.T) {
