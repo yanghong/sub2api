@@ -46,7 +46,7 @@ describe('PendingOAuthCreateAccountForm', () => {
     })
   })
 
-  it('emits trimmed email, password, and verify code on submit', async () => {
+  it('emits trimmed email, password, verify code, and invitation code on submit', async () => {
     const wrapper = mount(PendingOAuthCreateAccountForm, {
       props: {
         providerName: 'LinuxDo',
@@ -59,6 +59,7 @@ describe('PendingOAuthCreateAccountForm', () => {
     await wrapper.get('[data-testid="linuxdo-create-account-email"]').setValue('  user@example.com  ')
     await wrapper.get('[data-testid="linuxdo-create-account-password"]').setValue('secret-123')
     await wrapper.get('[data-testid="linuxdo-create-account-verify-code"]').setValue(' 246810 ')
+    await wrapper.get('[data-testid="linuxdo-create-account-invitation-code"]').setValue(' INVITE123 ')
     await wrapper.get('form').trigger('submit.prevent')
 
     expect(wrapper.emitted('submit')).toEqual([
@@ -66,7 +67,8 @@ describe('PendingOAuthCreateAccountForm', () => {
         {
           email: 'user@example.com',
           password: 'secret-123',
-          verifyCode: '246810'
+          verifyCode: '246810',
+          invitationCode: 'INVITE123'
         }
       ]
     ])
@@ -102,6 +104,7 @@ describe('PendingOAuthCreateAccountForm', () => {
 
     await flushPromises()
     await wrapper.get('[data-testid="linuxdo-create-account-password"]').setValue('secret-123')
+    await wrapper.get('[data-testid="linuxdo-create-account-invitation-code"]').setValue('INVITE123')
     await wrapper.get('form').trigger('submit.prevent')
 
     expect(wrapper.find('[data-testid="linuxdo-create-account-verify-code"]').exists()).toBe(false)
@@ -111,15 +114,16 @@ describe('PendingOAuthCreateAccountForm', () => {
         {
           email: 'prefill@example.com',
           password: 'secret-123',
-          verifyCode: ''
+          verifyCode: '',
+          invitationCode: 'INVITE123'
         }
       ]
     ])
   })
 
-  it('shows and emits invitation code when invitation-only signup is enabled', async () => {
+  it('shows and emits invitation code even when legacy invitation setting is disabled', async () => {
     getPublicSettings.mockResolvedValue({
-      invitation_code_enabled: true,
+      invitation_code_enabled: false,
       email_verify_enabled: true,
       turnstile_enabled: false,
       turnstile_site_key: ''
