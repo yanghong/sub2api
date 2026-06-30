@@ -341,8 +341,7 @@ describe('EmailVerifyView', () => {
       password: 'secret-123',
       verify_code: '123456',
       invitation_code: 'INVITE123',
-      adopt_display_name: undefined,
-      adopt_avatar: undefined,
+      aff_code: 'AFF123',
     })
     expect(persistOAuthTokenContextMock).toHaveBeenCalledWith({
       access_token: 'oauth-access-token',
