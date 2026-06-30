@@ -1011,36 +1011,28 @@ func TestOIDCOAuthCallbackVerifiedEmailFastPathIssuesTokenWithoutPendingSession(
 
 	require.Equal(t, http.StatusFound, recorder.Code)
 	location := recorder.Header().Get("Location")
-	require.Contains(t, location, "/auth/oidc/callback#")
-	require.Contains(t, location, "access_token=")
-	require.Contains(t, location, "refresh_token=")
-	require.Contains(t, location, "token_type=Bearer")
-	fragmentValues := parseOAuthRedirectFragment(t, location)
-	require.Equal(t, "/dashboard", fragmentValues.Get("redirect"))
-	requireCookieCleared(t, recorder, oauthPendingSessionCookieName)
-	requireCookieCleared(t, recorder, oauthPendingBrowserCookieName)
+	require.Equal(t, "/auth/oidc/callback", location)
+	require.NotContains(t, location, "access_token=")
+	require.NotContains(t, location, "refresh_token=")
+	require.NotContains(t, location, "token_type=Bearer")
+	require.NotNil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
 
 	ctx := context.Background()
-	user, err := client.User.Query().Where(dbuser.EmailEQ("oidc-fast-callback@example.com")).Only(ctx)
+	userCount, err := client.User.Query().Where(dbuser.EmailEQ("oidc-fast-callback@example.com")).Count(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "oidc_fast_callback", user.Username)
-	require.Equal(t, "oidc", user.SignupSource)
+	require.Zero(t, userCount)
 
-	identity, err := client.AuthIdentity.Query().Where(
+	identityCount, err := client.AuthIdentity.Query().Where(
 		authidentity.ProviderTypeEQ("oidc"),
 		authidentity.ProviderKeyEQ(cfg.IssuerURL),
 		authidentity.ProviderSubjectEQ("oidc-fast-callback-subject"),
-		authidentity.UserIDEQ(user.ID),
-	).Only(ctx)
+	).Count(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "oidc-fast-callback@example.com", identity.Metadata["email"])
-	require.Equal(t, true, identity.Metadata["email_verified"])
-	require.Equal(t, "OIDC Fast Callback", identity.Metadata["suggested_display_name"])
-	require.NotEqual(t, identity.Metadata["email"], identity.Metadata["synthetic_email"])
+	require.Zero(t, identityCount)
 
 	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
 	require.NoError(t, err)
-	require.Zero(t, pendingCount)
+	require.Equal(t, 1, pendingCount)
 }
 
 func TestOIDCOAuthCallbackVerifiedEmailFastPathBackendModeBlocksBeforeUserCreation(t *testing.T) {

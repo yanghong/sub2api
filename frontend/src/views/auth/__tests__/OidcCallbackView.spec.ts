@@ -517,6 +517,7 @@ describe('OidcCallbackView', () => {
     await flushPromises()
     await wrapper.get('[data-testid="oidc-create-account-email"]').setValue('existing@example.com')
     await wrapper.get('[data-testid="oidc-create-account-password"]').setValue('secret-123')
+    await wrapper.get('[data-testid="oidc-create-account-invitation-code"]').setValue('INVITE123')
     await wrapper.get('[data-testid="oidc-create-account-submit"]').trigger('click')
     await flushPromises()
 
@@ -546,6 +547,7 @@ describe('OidcCallbackView', () => {
     await flushPromises()
     await wrapper.get('[data-testid="oidc-create-account-email"]').setValue('new@example.com')
     await wrapper.get('[data-testid="oidc-create-account-password"]').setValue('secret-123')
+    await wrapper.get('[data-testid="oidc-create-account-invitation-code"]').setValue('INVITE123')
     await wrapper.get('[data-testid="oidc-create-account-submit"]').trigger('click')
     await flushPromises()
 

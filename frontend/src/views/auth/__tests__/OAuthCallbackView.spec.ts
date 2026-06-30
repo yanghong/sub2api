@@ -215,10 +215,13 @@ describe('OAuthCallbackView', () => {
     const passwordInputs = wrapper.findAll('input[type="password"]')
     await passwordInputs[0].setValue('secret-456')
     await passwordInputs[1].setValue('secret-456')
+    const invitationInput = wrapper.find('input[type="text"]')
+    await invitationInput.setValue('INVITE789')
     await wrapper.findAll('button').at(0)?.trigger('click')
 
     expect(apiPostMock).toHaveBeenCalledWith('/auth/oauth/github/complete-registration', {
       password: 'secret-456',
+      invitation_code: 'INVITE789',
     })
     expect(apiPostMock.mock.calls[0][1]).not.toHaveProperty('email')
     expect(setTokenMock).toHaveBeenCalledWith('token-2')

@@ -137,7 +137,6 @@ describe('EmailVerifyView', () => {
       JSON.stringify({
         email: 'fresh@example.com',
         password: 'secret-123',
-        aff_code: 'AFF123',
       })
     )
 
@@ -179,6 +178,7 @@ describe('EmailVerifyView', () => {
       JSON.stringify({
         email: 'fresh@example.com',
         password: 'secret-123',
+        invitation_code: 'INVITE123',
       })
     )
 
@@ -220,6 +220,7 @@ describe('EmailVerifyView', () => {
       JSON.stringify({
         email: 'fresh@example.com',
         password: 'secret-123',
+        invitation_code: 'INVITE123',
       })
     )
 
@@ -267,6 +268,7 @@ describe('EmailVerifyView', () => {
       JSON.stringify({
         email: 'fresh@example.com',
         password: 'secret-123',
+        invitation_code: 'INVITE123',
       })
     )
 
@@ -305,6 +307,8 @@ describe('EmailVerifyView', () => {
       JSON.stringify({
         email: 'fresh@example.com',
         password: 'secret-123',
+        aff_code: 'AFF123',
+        invitation_code: 'INVITE123',
       })
     )
     apiClientPostMock.mockResolvedValue({
@@ -336,6 +340,7 @@ describe('EmailVerifyView', () => {
       email: 'fresh@example.com',
       password: 'secret-123',
       verify_code: '123456',
+      invitation_code: 'INVITE123',
       aff_code: 'AFF123',
     })
     expect(persistOAuthTokenContextMock).toHaveBeenCalledWith({
@@ -368,6 +373,7 @@ describe('EmailVerifyView', () => {
       JSON.stringify({
         email: 'fresh@example.com',
         password: 'secret-123',
+        invitation_code: 'INVITE456',
       })
     )
     apiClientPostMock.mockResolvedValue({
@@ -400,6 +406,7 @@ describe('EmailVerifyView', () => {
       email: 'fresh@example.com',
       password: 'secret-123',
       verify_code: '123456',
+      invitation_code: 'INVITE456',
     })
     expect(setPendingAuthSessionMock).toHaveBeenCalledWith({
       token: '',

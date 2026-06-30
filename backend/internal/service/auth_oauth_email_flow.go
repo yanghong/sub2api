@@ -56,16 +56,12 @@ func (s *AuthService) SendPendingOAuthVerifyCode(ctx context.Context, email stri
 }
 
 func (s *AuthService) validateOAuthRegistrationInvitation(ctx context.Context, invitationCode string) (*RedeemCode, error) {
-	if s == nil || s.settingService == nil || !s.settingService.IsInvitationCodeEnabled(ctx) {
-		return nil, nil
-	}
-	if s.redeemRepo == nil && s.oauthEmailFlowClient(ctx) == nil {
-		return nil, ErrServiceUnavailable
-	}
-
 	invitationCode = strings.TrimSpace(invitationCode)
 	if invitationCode == "" {
 		return nil, ErrInvitationCodeRequired
+	}
+	if s == nil || (s.redeemRepo == nil && s.oauthEmailFlowClient(ctx) == nil) {
+		return nil, ErrServiceUnavailable
 	}
 
 	redeemCode, err := s.loadOAuthRegistrationInvitation(ctx, invitationCode)
@@ -305,16 +301,15 @@ func (s *AuthService) RollbackOAuthEmailAccountCreation(ctx context.Context, use
 }
 
 func (s *AuthService) restoreOAuthRegistrationInvitation(ctx context.Context, invitationCode string, userID int64) error {
-	if s == nil || s.settingService == nil || !s.settingService.IsInvitationCodeEnabled(ctx) {
+	if s == nil {
+		return ErrServiceUnavailable
+	}
+	invitationCode = strings.TrimSpace(invitationCode)
+	if invitationCode == "" || userID <= 0 {
 		return nil
 	}
 	if s.redeemRepo == nil && s.oauthEmailFlowClient(ctx) == nil {
 		return ErrServiceUnavailable
-	}
-
-	invitationCode = strings.TrimSpace(invitationCode)
-	if invitationCode == "" || userID <= 0 {
-		return nil
 	}
 
 	redeemCode, err := s.loadOAuthRegistrationInvitation(ctx, invitationCode)
