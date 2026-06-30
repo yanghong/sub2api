@@ -54,7 +54,7 @@
               @keyup.enter="handleSubmitRegistration"
             />
           </div>
-          <div v-if="invitationRequired">
+          <div>
             <label class="input-label">{{ t('auth.invitationCodeLabel') }}</label>
             <input
               v-model="invitationCode"
@@ -207,15 +207,13 @@ const providerName = computed(() =>
   pendingProvider.value === 'google' ? 'Google' : 'GitHub'
 )
 const registrationHint = computed(() =>
-  invitationRequired.value
-    ? t('auth.oidc.invitationRequired', { providerName: providerName.value })
-    : t('auth.oidc.completeRegistration')
+  t('auth.oidc.invitationRequired', { providerName: providerName.value })
 )
 const canSubmitRegistration = computed(() => {
   if (!registrationEmail.value.trim()) return false
   if (password.value.length < 6) return false
   if (password.value !== confirmPassword.value) return false
-  if (invitationRequired.value && !invitationCode.value.trim()) return false
+  if (!invitationCode.value.trim()) return false
   return true
 })
 
@@ -338,16 +336,14 @@ async function handleSubmitRegistration() {
     return
   }
   const code = invitationCode.value.trim()
-  if (invitationRequired.value && !code) return
+  if (!code) return
 
   isSubmitting.value = true
   try {
-    const payload: { password: string; invitation_code?: string; aff_code?: string } = {
+    const payload: { password: string; invitation_code: string; aff_code?: string } = {
       password: password.value,
+      invitation_code: code,
       ...oauthAffiliatePayload(loadOAuthAffiliateCode())
-    }
-    if (invitationRequired.value) {
-      payload.invitation_code = code
     }
     const { data } = await apiClient.post<OAuthTokenResponse>(
       `/auth/oauth/${pendingProvider.value}/complete-registration`,
