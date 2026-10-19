@@ -240,21 +240,7 @@ func TestLinuxDoOAuthCallbackAllowsMissingVerifierWhenPKCEDisabled(t *testing.T)
 
 	handler.LinuxDoOAuthCallback(c)
 
-	require.Equal(t, http.StatusFound, recorder.Code)
-	location := recorder.Header().Get("Location")
-	require.Contains(t, location, "/auth/linuxdo/callback#")
-	require.Contains(t, location, "access_token=")
-	requireCookieCleared(t, recorder, oauthPendingSessionCookieName)
-
-	identity, err := client.AuthIdentity.Query().
-		Where(
-			authidentity.ProviderTypeEQ("linuxdo"),
-			authidentity.ProviderKeyEQ("linuxdo"),
-			authidentity.ProviderSubjectEQ("compat-subject"),
-		).
-		Only(context.Background())
-	require.NoError(t, err)
-	require.Positive(t, identity.UserID)
+	requireInvitationPendingSession(t, client, recorder, "/auth/linuxdo/callback")
 }
 
 func TestLinuxDoOAuthBindStartAcceptsAccessTokenCookie(t *testing.T) {
@@ -699,7 +685,8 @@ func TestLinuxDoOAuthCallbackEmailVerificationCompletesWithBoundEmail(t *testing
 
 	createRecorder := httptest.NewRecorder()
 	createCtx, _ := gin.CreateTestContext(createRecorder)
-	body := bytes.NewBufferString(`{"email":"fresh@example.com","verify_code":"246810","password":"secret-123","adopt_display_name":false,"adopt_avatar":false}`)
+	seedSignupInvitation(t, client, "invite-1")
+	body := bytes.NewBufferString(`{"invitation_code":"invite-1","email":"fresh@example.com","verify_code":"246810","password":"secret-123","adopt_display_name":false,"adopt_avatar":false}`)
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/pending/create-account", body)
 	createReq.Header.Set("Content-Type", "application/json")
 	createReq.AddCookie(sessionCookie)
@@ -733,7 +720,7 @@ func TestLinuxDoOAuthCallbackEmailVerificationCompletesWithBoundEmail(t *testing
 	require.NotNil(t, storedSession.ConsumedAt)
 }
 
-func TestLinuxDoOAuthCallbackDirectlyLogsInNewUserWhenEmailVerificationDisabled(t *testing.T) {
+func TestLinuxDoOAuthCallbackRequiresInvitationWhenEmailVerificationDisabled(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/token":
@@ -775,38 +762,7 @@ func TestLinuxDoOAuthCallbackDirectlyLogsInNewUserWhenEmailVerificationDisabled(
 
 	handler.LinuxDoOAuthCallback(c)
 
-	require.Equal(t, http.StatusFound, recorder.Code)
-	location := recorder.Header().Get("Location")
-	require.Contains(t, location, "/auth/linuxdo/callback#")
-	require.Contains(t, location, "access_token=")
-	require.Contains(t, location, "refresh_token=")
-	fragmentValues := parseOAuthRedirectFragment(t, location)
-	require.Equal(t, "/dashboard", fragmentValues.Get("redirect"))
-	requireCookieCleared(t, recorder, oauthPendingSessionCookieName)
-	requireCookieCleared(t, recorder, oauthPendingBrowserCookieName)
-
-	ctx := context.Background()
-	userEntity, err := client.User.Query().
-		Where(dbuser.EmailEQ("linuxdo-direct-123@linuxdo-connect.invalid")).
-		Only(ctx)
-	require.NoError(t, err)
-	require.Equal(t, "linuxdo_direct", userEntity.Username)
-	require.Equal(t, "linuxdo", userEntity.SignupSource)
-
-	identity, err := client.AuthIdentity.Query().
-		Where(
-			authidentity.ProviderTypeEQ("linuxdo"),
-			authidentity.ProviderKeyEQ("linuxdo"),
-			authidentity.ProviderSubjectEQ("direct-123"),
-		).
-		Only(ctx)
-	require.NoError(t, err)
-	require.Equal(t, userEntity.ID, identity.UserID)
-	require.Equal(t, "https://cdn.example/direct.png", identity.Metadata["suggested_avatar_url"])
-
-	sessionCount, err := client.PendingAuthSession.Query().Count(ctx)
-	require.NoError(t, err)
-	require.Zero(t, sessionCount)
+	requireInvitationPendingSession(t, client, recorder, "/auth/linuxdo/callback")
 }
 
 func TestLinuxDoOAuthCallbackCreatesBindPendingSessionForCurrentUser(t *testing.T) {
@@ -915,6 +871,7 @@ func TestCompleteLinuxDoOAuthRegistrationAppliesPendingAdoptionDecision(t *testi
 	})
 	require.NoError(t, err)
 
+	seedSignupInvitation(t, client, "invite-1")
 	body := bytes.NewBufferString(`{"invitation_code":"invite-1","adopt_display_name":true}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -1092,6 +1049,7 @@ func TestCompleteLinuxDoOAuthRegistrationBindsIdentityWithoutAdoptionFlags(t *te
 		Save(ctx)
 	require.NoError(t, err)
 
+	seedSignupInvitation(t, client, "invite-1")
 	body := bytes.NewBufferString(`{"invitation_code":"invite-1"}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)

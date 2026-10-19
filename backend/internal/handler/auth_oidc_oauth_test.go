@@ -643,6 +643,7 @@ func TestCompleteOIDCOAuthRegistrationAppliesPendingAdoptionDecision(t *testing.
 	})
 	require.NoError(t, err)
 
+	seedSignupInvitation(t, client, "invite-1")
 	body := bytes.NewBufferString(`{"invitation_code":"invite-1","adopt_display_name":true}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -822,6 +823,7 @@ func TestCompleteOIDCOAuthRegistrationBindsIdentityWithoutAdoptionFlags(t *testi
 		Save(ctx)
 	require.NoError(t, err)
 
+	seedSignupInvitation(t, client, "invite-1")
 	body := bytes.NewBufferString(`{"invitation_code":"invite-1"}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -927,7 +929,7 @@ func TestCompleteOIDCOAuthRegistrationRejectsIdentityOwnershipConflictBeforeUser
 	require.Nil(t, storedSession.ConsumedAt)
 }
 
-func TestTryOIDCVerifiedEmailFastPathCreatesUserAndIdentity(t *testing.T) {
+func TestTryOIDCVerifiedEmailFastPathCannotCreateWithoutInvitationWhenStoredSettingDisabled(t *testing.T) {
 	handler, client := newOAuthPendingFlowTestHandler(t, false)
 	t.Cleanup(func() { _ = client.Close() })
 
@@ -953,36 +955,17 @@ func TestTryOIDCVerifiedEmailFastPathCreatesUserAndIdentity(t *testing.T) {
 			"suggested_avatar_url":   "",
 		},
 	)
-	require.True(t, completed)
-	require.Equal(t, http.StatusFound, recorder.Code)
-
-	location := recorder.Header().Get("Location")
-	require.Contains(t, location, "/auth/oidc/callback")
-	require.Contains(t, location, "access_token=")
-	require.Contains(t, location, "refresh_token=")
-	require.Contains(t, location, "token_type=Bearer")
-
-	user, err := client.User.Query().Where(dbuser.EmailEQ("fastpath@example.com")).Only(ctx)
+	require.False(t, completed)
+	require.Empty(t, recorder.Header().Get("Location"))
+	count, err := client.User.Query().Count(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "fastpath_user", user.Username)
-	require.Equal(t, "oidc", user.SignupSource)
-
-	identityRecord, err := client.AuthIdentity.Query().Where(
-		authidentity.ProviderTypeEQ("oidc"),
-		authidentity.ProviderKeyEQ("https://issuer.example.com"),
-		authidentity.ProviderSubjectEQ("fast-path-subject"),
-		authidentity.UserIDEQ(user.ID),
-	).Only(ctx)
+	require.Zero(t, count)
+	count, err = client.AuthIdentity.Query().Count(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "fastpath@example.com", identityRecord.Metadata["email"])
-	require.Equal(t, true, identityRecord.Metadata["email_verified"])
-
-	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
-	require.NoError(t, err)
-	require.Zero(t, pendingCount)
+	require.Zero(t, count)
 }
 
-func TestOIDCOAuthCallbackVerifiedEmailFastPathIssuesTokenWithoutPendingSession(t *testing.T) {
+func TestOIDCOAuthCallbackVerifiedEmailRequiresInvitationPendingSession(t *testing.T) {
 	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
 		Subject:           "oidc-fast-callback-subject",
 		PreferredUsername: "oidc_fast_callback",
@@ -1009,41 +992,10 @@ func TestOIDCOAuthCallbackVerifiedEmailFastPathIssuesTokenWithoutPendingSession(
 
 	handler.OIDCOAuthCallback(c)
 
-	require.Equal(t, http.StatusFound, recorder.Code)
-	location := recorder.Header().Get("Location")
-	require.Contains(t, location, "/auth/oidc/callback#")
-	require.Contains(t, location, "access_token=")
-	require.Contains(t, location, "refresh_token=")
-	require.Contains(t, location, "token_type=Bearer")
-	fragmentValues := parseOAuthRedirectFragment(t, location)
-	require.Equal(t, "/dashboard", fragmentValues.Get("redirect"))
-	requireCookieCleared(t, recorder, oauthPendingSessionCookieName)
-	requireCookieCleared(t, recorder, oauthPendingBrowserCookieName)
-
-	ctx := context.Background()
-	user, err := client.User.Query().Where(dbuser.EmailEQ("oidc-fast-callback@example.com")).Only(ctx)
-	require.NoError(t, err)
-	require.Equal(t, "oidc_fast_callback", user.Username)
-	require.Equal(t, "oidc", user.SignupSource)
-
-	identity, err := client.AuthIdentity.Query().Where(
-		authidentity.ProviderTypeEQ("oidc"),
-		authidentity.ProviderKeyEQ(cfg.IssuerURL),
-		authidentity.ProviderSubjectEQ("oidc-fast-callback-subject"),
-		authidentity.UserIDEQ(user.ID),
-	).Only(ctx)
-	require.NoError(t, err)
-	require.Equal(t, "oidc-fast-callback@example.com", identity.Metadata["email"])
-	require.Equal(t, true, identity.Metadata["email_verified"])
-	require.Equal(t, "OIDC Fast Callback", identity.Metadata["suggested_display_name"])
-	require.NotEqual(t, identity.Metadata["email"], identity.Metadata["synthetic_email"])
-
-	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
-	require.NoError(t, err)
-	require.Zero(t, pendingCount)
+	requireInvitationPendingSession(t, client, recorder, "/auth/oidc/callback")
 }
 
-func TestOIDCOAuthCallbackVerifiedEmailFastPathBackendModeBlocksBeforeUserCreation(t *testing.T) {
+func TestOIDCOAuthCallbackVerifiedEmailBackendModeDoesNotBypassInvitation(t *testing.T) {
 	cfg, cleanup := newOIDCTestProvider(t, oidcProviderFixture{
 		Subject:           "oidc-fast-backend-mode-subject",
 		PreferredUsername: "oidc_backend_mode",
@@ -1071,23 +1023,7 @@ func TestOIDCOAuthCallbackVerifiedEmailFastPathBackendModeBlocksBeforeUserCreati
 
 	handler.OIDCOAuthCallback(c)
 
-	require.Equal(t, http.StatusFound, recorder.Code)
-	assertOAuthRedirectError(t, recorder.Header().Get("Location"), "login_blocked", "BACKEND_MODE_ADMIN_ONLY")
-	requireCookieCleared(t, recorder, oauthPendingSessionCookieName)
-	requireCookieCleared(t, recorder, oauthPendingBrowserCookieName)
-
-	ctx := context.Background()
-	userCount, err := client.User.Query().Where(dbuser.EmailEQ("oidc-backend-mode@example.com")).Count(ctx)
-	require.NoError(t, err)
-	require.Zero(t, userCount)
-	identityCount, err := client.AuthIdentity.Query().
-		Where(authidentity.ProviderSubjectEQ("oidc-fast-backend-mode-subject")).
-		Count(ctx)
-	require.NoError(t, err)
-	require.Zero(t, identityCount)
-	pendingCount, err := client.PendingAuthSession.Query().Count(ctx)
-	require.NoError(t, err)
-	require.Zero(t, pendingCount)
+	requireInvitationPendingSession(t, client, recorder, "/auth/oidc/callback")
 }
 
 func TestTryOIDCVerifiedEmailFastPathSkippedWhenInvitationCodeRequired(t *testing.T) {

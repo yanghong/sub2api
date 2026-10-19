@@ -171,10 +171,14 @@ func (s *AuthService) RegisterWithVerification(ctx context.Context, email, passw
 		return "", nil, ErrEmailReserved
 	}
 	// 检查是否需要邀请码
+	invitationCode = strings.TrimSpace(invitationCode)
 	var invitationRedeemCode *RedeemCode
 	if s.settingService != nil && s.settingService.IsInvitationCodeEnabled(ctx) {
 		if invitationCode == "" {
 			return "", nil, ErrInvitationCodeRequired
+		}
+		if s.redeemRepo == nil {
+			return "", nil, ErrServiceUnavailable
 		}
 		// 验证邀请码
 		redeemCode, err := s.redeemRepo.GetByCode(ctx, invitationCode)
@@ -590,6 +594,9 @@ func (s *AuthService) LoginOrRegisterOAuth(ctx context.Context, email, username 
 			if s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx) {
 				return "", nil, ErrRegDisabled
 			}
+			if s.settingService.IsInvitationCodeEnabled(ctx) {
+				return "", nil, ErrOAuthInvitationRequired
+			}
 
 			randomPassword, err := randomHexString(32)
 			if err != nil {
@@ -721,10 +728,14 @@ func (s *AuthService) loginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 			}
 
 			// 检查是否需要邀请码
+			invitationCode = strings.TrimSpace(invitationCode)
 			var invitationRedeemCode *RedeemCode
 			if s.settingService != nil && s.settingService.IsInvitationCodeEnabled(ctx) {
 				if invitationCode == "" {
 					return nil, nil, ErrOAuthInvitationRequired
+				}
+				if s.redeemRepo == nil {
+					return nil, nil, ErrServiceUnavailable
 				}
 				redeemCode, err := s.redeemRepo.GetByCode(ctx, invitationCode)
 				if err != nil {

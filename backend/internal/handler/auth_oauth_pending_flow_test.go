@@ -1098,7 +1098,8 @@ func TestCreateOIDCOAuthAccountCreatesUserBindsIdentityAndConsumesSession(t *tes
 		Save(ctx)
 	require.NoError(t, err)
 
-	body := bytes.NewBufferString(`{"email":"fresh@example.com","verify_code":"246810","password":"secret-123","adopt_display_name":false,"adopt_avatar":false}`)
+	seedSignupInvitation(t, client, "invite-1")
+	body := bytes.NewBufferString(`{"invitation_code":"invite-1","email":"fresh@example.com","verify_code":"246810","password":"secret-123","adopt_display_name":false,"adopt_avatar":false}`)
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/create-account", body)
@@ -1170,7 +1171,8 @@ func TestCreateOIDCOAuthAccountAppliesPromoCodeFromPendingSession(t *testing.T) 
 		Save(ctx)
 	require.NoError(t, err)
 
-	body := bytes.NewBufferString(`{"email":"promo@example.com","verify_code":"246810","password":"secret-123"}`)
+	seedSignupInvitation(t, client, "invite-1")
+	body := bytes.NewBufferString(`{"invitation_code":"invite-1","email":"promo@example.com","verify_code":"246810","password":"secret-123"}`)
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/create-account", body)
@@ -1223,7 +1225,8 @@ func TestCreateOIDCOAuthAccountWithoutPromoCodeDoesNotApplyPromo(t *testing.T) {
 		Save(ctx)
 	require.NoError(t, err)
 
-	body := bytes.NewBufferString(`{"email":"no-promo@example.com","verify_code":"246810","password":"secret-123"}`)
+	seedSignupInvitation(t, client, "invite-1")
+	body := bytes.NewBufferString(`{"invitation_code":"invite-1","email":"no-promo@example.com","verify_code":"246810","password":"secret-123"}`)
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/create-account", body)
@@ -1275,7 +1278,8 @@ func TestCreateOIDCOAuthAccountDoesNotApplyPromoWhenDisabled(t *testing.T) {
 		Save(ctx)
 	require.NoError(t, err)
 
-	body := bytes.NewBufferString(`{"email":"promo-disabled@example.com","verify_code":"246810","password":"secret-123"}`)
+	seedSignupInvitation(t, client, "invite-1")
+	body := bytes.NewBufferString(`{"invitation_code":"invite-1","email":"promo-disabled@example.com","verify_code":"246810","password":"secret-123"}`)
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/create-account", body)
@@ -1501,7 +1505,8 @@ func TestCreateOIDCOAuthAccountRejectsSecondEmailOutsideRegistrationSuffixWhitel
 		Save(ctx)
 	require.NoError(t, err)
 
-	body := bytes.NewBufferString(`{"email":"foo@gmail.com","verify_code":"135790","password":"secret-123"}`)
+	seedSignupInvitation(t, client, "invite-1")
+	body := bytes.NewBufferString(`{"invitation_code":"invite-1","email":"foo@gmail.com","verify_code":"135790","password":"secret-123"}`)
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/create-account", body)
@@ -1555,7 +1560,8 @@ func TestCreateOIDCOAuthAccountRejectsEmailOutsideWhitelistWhenQuotaDisabled(t *
 		Save(ctx)
 	require.NoError(t, err)
 
-	body := bytes.NewBufferString(`{"email":"foo@gmail.com","verify_code":"135790","password":"secret-123"}`)
+	seedSignupInvitation(t, client, "invite-1")
+	body := bytes.NewBufferString(`{"invitation_code":"invite-1","email":"foo@gmail.com","verify_code":"135790","password":"secret-123"}`)
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/create-account", body)
@@ -1821,7 +1827,8 @@ func TestCreateOIDCOAuthAccountRollsBackPostBindFailureBeforeIdentityCanCommit(t
 		pendingOAuthCreateAccountPreCommitHook = nil
 	})
 
-	body := bytes.NewBufferString(`{"email":"fresh@example.com","verify_code":"246810","password":"secret-123"}`)
+	seedSignupInvitation(t, client, "invite-1")
+	body := bytes.NewBufferString(`{"invitation_code":"invite-1","email":"fresh@example.com","verify_code":"246810","password":"secret-123"}`)
 	recorder := httptest.NewRecorder()
 	ginCtx, _ := gin.CreateTestContext(recorder)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/oauth/oidc/create-account", body)
@@ -3609,4 +3616,30 @@ func (s *oauthPendingFlowEmailCacheStub) IncrNotifyVerifyCodeAttempts(context.Co
 
 func (s *oauthPendingFlowEmailCacheStub) ConsumePasswordResetToken(context.Context, string, string) (bool, error) {
 	return false, nil
+}
+
+func seedSignupInvitation(t *testing.T, client *dbent.Client, code string) {
+	t.Helper()
+	_, err := client.RedeemCode.Create().SetCode(code).SetType(service.RedeemTypeInvitation).SetStatus(service.StatusUnused).SetValue(0).Save(context.Background())
+	require.NoError(t, err)
+}
+
+func requireInvitationPendingSession(t *testing.T, client *dbent.Client, recorder *httptest.ResponseRecorder, callback string) {
+	t.Helper()
+	require.Equal(t, http.StatusFound, recorder.Code)
+	require.Equal(t, callback, recorder.Header().Get("Location"))
+	require.NotNil(t, findCookie(recorder.Result().Cookies(), oauthPendingSessionCookieName))
+	ctx := context.Background()
+	session, err := client.PendingAuthSession.Query().Only(ctx)
+	require.NoError(t, err)
+	completion, ok := readCompletionResponse(session.LocalFlowState)
+	require.True(t, ok)
+	require.Equal(t, oauthPendingChoiceStep, completion["step"])
+	require.Equal(t, true, completion["create_account_allowed"])
+	count, err := client.User.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, count)
+	count, err = client.AuthIdentity.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, count)
 }

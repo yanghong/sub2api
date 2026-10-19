@@ -127,6 +127,10 @@ func newOAuthEmailFlowAuthService(
 		},
 	}
 
+	if redeemRepo == nil {
+		redeemRepo = newTestSignupInvitationRepo()
+	}
+
 	settingService := NewSettingService(&settingRepoStub{values: settings}, cfg)
 	emailService := NewEmailService(&settingRepoStub{values: settings}, emailCache)
 
@@ -203,7 +207,7 @@ func TestRegisterOAuthEmailAccount_NonWhitelistDomainLimit(t *testing.T) {
 	userRepo := &userRepoStub{domainCounts: map[string]int{"custom.example": 1}}
 	authService := newOAuthEmailFlowAuthService(
 		userRepo,
-		&redeemCodeRepoStub{},
+		newTestSignupInvitationRepo(),
 		&refreshTokenCacheStub{},
 		map[string]string{
 			SettingKeyRegistrationEnabled:                 "true",
@@ -223,7 +227,7 @@ func TestRegisterOAuthEmailAccount_NonWhitelistDomainLimit(t *testing.T) {
 		"second@custom.example",
 		"secret-123",
 		"246810",
-		"",
+		testSignupInvitation,
 		"oidc",
 	)
 
@@ -249,7 +253,7 @@ func TestRegisterVerifiedOAuthEmailAccount_NonWhitelistDomainLimit(t *testing.T)
 		context.Background(),
 		"second@custom.example",
 		"secret-123",
-		"",
+		testSignupInvitation,
 		"oidc",
 	)
 
@@ -314,7 +318,7 @@ func TestRegisterOAuthEmailAccountSetsNormalizedSignupSourceOnCreatedUser(t *tes
 	}
 	authService := newOAuthEmailFlowAuthService(
 		userRepo,
-		&redeemCodeRepoStub{},
+		newTestSignupInvitationRepo(),
 		&refreshTokenCacheStub{},
 		map[string]string{
 			SettingKeyRegistrationEnabled: "true",
@@ -329,7 +333,7 @@ func TestRegisterOAuthEmailAccountSetsNormalizedSignupSourceOnCreatedUser(t *tes
 		"fresh@example.com",
 		"secret-123",
 		"246810",
-		"",
+		testSignupInvitation,
 		" OIDC ",
 	)
 
@@ -374,7 +378,7 @@ func TestRegisterOAuthEmailAccountKeepsGitHubAndGoogleSignupSource(t *testing.T)
 			}
 			authService := newOAuthEmailFlowAuthService(
 				userRepo,
-				&redeemCodeRepoStub{},
+				newTestSignupInvitationRepo(),
 				&refreshTokenCacheStub{},
 				map[string]string{
 					SettingKeyRegistrationEnabled: "true",
@@ -389,7 +393,7 @@ func TestRegisterOAuthEmailAccountKeepsGitHubAndGoogleSignupSource(t *testing.T)
 				tt.email,
 				"secret-123",
 				"246810",
-				"",
+				testSignupInvitation,
 				tt.signupSource,
 			)
 
@@ -414,7 +418,7 @@ func TestRegisterOAuthEmailAccountFallsBackUnknownSignupSourceToEmail(t *testing
 	}
 	authService := newOAuthEmailFlowAuthService(
 		userRepo,
-		&redeemCodeRepoStub{},
+		newTestSignupInvitationRepo(),
 		&refreshTokenCacheStub{},
 		map[string]string{
 			SettingKeyRegistrationEnabled: "true",
@@ -429,7 +433,7 @@ func TestRegisterOAuthEmailAccountFallsBackUnknownSignupSourceToEmail(t *testing
 		"fallback@example.com",
 		"secret-123",
 		"246810",
-		"",
+		testSignupInvitation,
 		"unknown-provider",
 	)
 
@@ -486,7 +490,7 @@ func TestRollbackOAuthEmailAccountCreationPropagatesDeleteError(t *testing.T) {
 	userRepo := &userRepoStub{deleteErr: errors.New("delete failed")}
 	authService := newOAuthEmailFlowAuthService(
 		userRepo,
-		&redeemCodeRepoStub{},
+		newTestSignupInvitationRepo(),
 		&refreshTokenCacheStub{},
 		map[string]string{
 			SettingKeyRegistrationEnabled: "true",
@@ -529,7 +533,7 @@ func TestFinalizeOAuthEmailAccount_SnapshotsPlatformQuotaDefaults(t *testing.T) 
 	err := authService.FinalizeOAuthEmailAccount(
 		context.Background(),
 		user,
-		"",
+		testSignupInvitation,
 		"oidc",
 		"",
 	)

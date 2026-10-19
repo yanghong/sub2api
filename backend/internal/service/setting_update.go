@@ -159,6 +159,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		settings.GoogleOAuthFrontendRedirectURL = defaultGoogleOAuthFrontend
 	}
 
+	settings.InvitationCodeEnabled = invitationRegistrationRequired
 	updates := make(map[string]string)
 
 	// 注册设置

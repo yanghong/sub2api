@@ -137,7 +137,7 @@ CREATE TABLE IF NOT EXISTS user_provider_default_grants (
 		values: settings,
 	}, cfg)
 
-	svc := service.NewAuthService(client, repo, nil, nil, cfg, settingSvc, nil, nil, nil, nil, defaultSubAssigner, nil, nil)
+	svc := service.NewAuthService(client, repo, repository.NewRedeemCodeRepository(client), nil, cfg, settingSvc, nil, nil, nil, nil, defaultSubAssigner, nil, nil)
 	return svc, repo, client
 }
 
@@ -147,7 +147,9 @@ func TestAuthServiceRegisterDualWritesEmailIdentity(t *testing.T) {
 	}, nil)
 	ctx := context.Background()
 
-	token, user, err := svc.Register(ctx, "user@example.com", "password")
+	_, err := client.RedeemCode.Create().SetCode("IDENTITY-INVITE").SetType(service.RedeemTypeInvitation).SetStatus(service.StatusUnused).SetValue(0).Save(ctx)
+	require.NoError(t, err)
+	token, user, err := svc.RegisterWithVerification(ctx, "user@example.com", "password", "", "", "IDENTITY-INVITE", "")
 	require.NoError(t, err)
 	require.NotEmpty(t, token)
 	require.NotNil(t, user)

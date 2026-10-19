@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"testing"
 
@@ -31,13 +30,6 @@ func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
 		}
 	}
 	return nil
-}
-
-func requireCookieCleared(t *testing.T, recorder *httptest.ResponseRecorder, name string) {
-	t.Helper()
-	cookie := findCookie(recorder.Result().Cookies(), name)
-	require.NotNil(t, cookie)
-	require.Equal(t, -1, cookie.MaxAge)
 }
 
 func decodeCookieValueForTest(t *testing.T, value string) string {

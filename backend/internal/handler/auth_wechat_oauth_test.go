@@ -969,6 +969,7 @@ func TestCompleteWeChatOAuthRegistrationBindsIdentityWithoutAdoptionFlags(t *tes
 		Save(ctx)
 	require.NoError(t, err)
 
+	seedSignupInvitation(t, client, "invite-1")
 	body := bytes.NewBufferString(`{"invitation_code":"invite-1"}`)
 	recorder := httptest.NewRecorder()
 	completeCtx, _ := gin.CreateTestContext(recorder)

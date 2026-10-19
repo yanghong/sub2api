@@ -61,13 +61,12 @@ func (s *SettingService) IsPromoCodeEnabled(ctx context.Context) bool {
 	return value != "false"
 }
 
-// IsInvitationCodeEnabled 检查是否启用邀请码注册功能
+// 本 fork 固定要求邀请码，避免历史设置关闭后绕过注册限制。
+const invitationRegistrationRequired = true
+
+// IsInvitationCodeEnabled returns the effective registration policy.
 func (s *SettingService) IsInvitationCodeEnabled(ctx context.Context) bool {
-	value, err := s.settingRepo.GetValue(ctx, SettingKeyInvitationCodeEnabled)
-	if err != nil {
-		return false // 默认关闭
-	}
-	return value == "true"
+	return invitationRegistrationRequired
 }
 
 // GetCustomMenuItemsRaw returns the raw JSON string of custom_menu_items setting.
